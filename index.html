@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Gestor RD Musico</title>
+<title>Gestor RD Musico · v20261013-0114</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -4511,12 +4511,12 @@ const { ROLES } = __X;
 async function mostrarLogin(host, alEntrar) {
     const mig = await migrarUsuariosSiHaceFalta();
     host.innerHTML = `
-    <div style="position:fixed;inset:0;z-index:5000;background:linear-gradient(160deg,#0f172a 0%,#1e293b 100%);
+    <div style="position:fixed;inset:0;z-index:5000;background:linear-gradient(160deg,#2b1232 0%,#4a1b52 100%);
                 display:flex;align-items:center;justify-content:center;padding:20px;overflow:auto;">
         <div style="background:#fff;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.4);
                     width:100%;max-width:390px;padding:30px 26px;">
             <div style="text-align:center;margin-bottom:22px;">
-                <div style="font-size:1.5rem;font-weight:800;color:#1e40af;letter-spacing:.5px;">GESTOR RD MUSICO</div>
+                <div style="font-size:1.5rem;font-weight:800;color:#4a1b52;letter-spacing:.5px;">GESTOR RD MUSICO</div>
                 <div style="font-size:.72rem;color:#64748b;letter-spacing:2px;font-weight:600;">GESTIÓN COMERCIAL Y OPERACIONAL</div>
             </div>
             ${mig.creado ? `<div class="warn" style="font-size:12px;">
