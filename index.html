@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Gestor RD Musico · v20261013-0114</title>
+<title>Gestor RD Musico · v20261013-0138</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -492,6 +492,31 @@ tr:hover { background: #f6eef7; }
 .badge-red { background: #fbe9e7; color: #8c1d18; }
 .app-header .brand b { font-weight: 700; }
 .app-header .brand-logo { width: 32px; height: 32px; border-radius: 9px; background: #fff; object-fit: cover; flex: 0 0 auto; display: block; }
+.app-header .sy-wrap { display: flex; align-items: center; gap: 8px; }
+.app-header .sy { line-height: 24px; padding: 0 12px; border-radius: 12px; background: rgba(255,255,255,.18); color: #fff; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; user-select: none; }
+.app-header .sy.ok { background: #1b7a3d; }
+.app-header .sy.pend { background: #b8740b; }
+.app-header .sy.err { background: #b3261e; }
+.app-header .syncnow { width: 30px; height: 30px; border: 0; border-radius: 50%; background: rgba(255,255,255,.18); color: #fff; font-size: 17px; line-height: 30px; padding: 0; margin: 0; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+.app-header .syncnow:hover { background: rgba(255,255,255,.32); }
+.app-header .syncnow.run { background: #b8740b; }
+.app-header .syncnow.run span { display: inline-block; animation: rdmGiro 1s linear infinite; }
+.app-header .syncnow.ok { background: #1b7a3d; }
+.app-header .syncnow.err { background: #b3261e; }
+@keyframes rdmGiro { to { transform: rotate(360deg); } }
+.app-header .bell-btn { position: relative; width: 30px; height: 30px; border: 0; border-radius: 50%; background: rgba(255,255,255,.18); color: #fff; font-size: 15px; line-height: 30px; padding: 0; margin: 0; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+.app-header .bell-btn:hover { background: rgba(255,255,255,.32); }
+.bell-badge { position: absolute; top: -4px; right: -4px; min-width: 16px; height: 16px; line-height: 16px; padding: 0 4px; box-sizing: border-box; border-radius: 8px; background: #b3261e; color: #fff; font-size: 10px; font-weight: 700; text-align: center; border: 1.5px solid #6b2a72; }
+.bell-panel { position: absolute; top: 40px; right: 0; z-index: 1500; width: 360px; max-width: 92vw; max-height: 70vh; overflow: auto; background: #fff; color: #1f2937; border: 1px solid #d9c4dc; border-radius: 10px; box-shadow: 0 10px 28px rgba(43,18,50,.3); }
+.bell-cab { display: flex; justify-content: space-between; align-items: baseline; padding: 10px 14px; background: #f6eef7; border-bottom: 1px solid #e6d3e9; font-size: 13px; color: #4a1b52; }
+.bell-cab span { font-size: 11px; color: #6b7280; }
+.bell-ayuda { padding: 8px 14px; font-size: 11px; color: #6b7280; border-bottom: 1px solid #f1e3f3; }
+.bell-item { padding: 9px 14px 10px; border-bottom: 1px solid #f1e3f3; border-left: 4px solid #6b7280; }
+.bell-meta { font-size: 11px; color: #6b7280; margin-bottom: 3px; }
+.bell-nivel { display: inline-block; color: #fff; border-radius: 8px; padding: 0 7px; font-size: 10px; font-weight: 600; line-height: 16px; margin-right: 4px; }
+.bell-nuevo { color: #6b2a72; font-size: 10px; text-transform: uppercase; margin-left: 4px; }
+.bell-msg { font-size: 12.5px; line-height: 1.35; margin-bottom: 6px; }
+.bell-vacio { padding: 22px 14px; font-size: 13px; color: #6b7280; text-align: center; }
 </style>
 
 </head>
@@ -1844,12 +1869,41 @@ async function eliminarDeColeccionResto(clave, idValor, usuario) {
     return { ok: true, resultado: fusion };
 }
 
+let _estadoGlobal = 'inactivo';
+const _suscriptoresEstado = [];
+const _ESCRITURAS = /^api(Guardar|Fusionar|Cambiar|Agregar|Empujar|Eliminar)/;
+let _enVuelo = 0;
+let _errorEscritura = '';
+let _conexion = 'desconocida';
+let _ultimoOk = 0;
+
+function _seguirLlamada(funcion, promesa) {
+    const escribe = _ESCRITURAS.test(funcion);
+    if (!escribe) return promesa;
+    const critica = funcion !== 'apiAgregarBitacora';
+    _enVuelo++;
+    _recalcularEstado();
+    return promesa.then(r => {
+        _enVuelo--;
+        if (critica) _errorEscritura = '';
+        _conexion = 'ok';
+        _ultimoOk = Date.now();
+        _recalcularEstado();
+        return r;
+    }, e => {
+        _enVuelo--;
+        if (critica) _errorEscritura = (e && e.message) || 'Error de escritura';
+        _recalcularEstado();
+        throw e;
+    });
+}
+
 function llamar(funcion, ...args) {
-    return _llamarConTimeout(funcion, TIMEOUT_MS, args);
+    return _seguirLlamada(funcion, _llamarConTimeout(funcion, TIMEOUT_MS, args));
 }
 
 function llamarLento(funcion, ...args) {
-    return _llamarConTimeout(funcion, TIMEOUT_MS_LECTURA_MASIVA, args);
+    return _seguirLlamada(funcion, _llamarConTimeout(funcion, TIMEOUT_MS_LECTURA_MASIVA, args));
 }
 
 function _llamarConTimeout(funcion, timeoutMs, args) {
@@ -2010,7 +2064,12 @@ async function subirTodoNuevo(onEstado) {
     for (const clave of Object.keys(COLECCIONES_RESTO)) {
         try {
             const def = COLECCIONES_RESTO[clave];
-            const local = await store.lista(def.claveLocal);
+            let local = await store.lista(def.claveLocal);
+            if (def.idCampo || !(local || []).length) {
+                await sincronizarColeccionResto(clave);
+                local = await store.lista(def.claveLocal);
+            }
+            if (!(local || []).length) { aviso(_etiquetaSync(clave), true, 0, 'sin datos locales'); continue; }
             const r = await subirColeccionResto(clave);
             if (!r || r.ok !== true) throw new Error((r && r.error) || 'No se pudo respaldar');
             aviso(_etiquetaSync(clave), true, (local||[]).length, 'enviados');
@@ -2182,6 +2241,141 @@ async function auditarSincronizacion(categorias) {
     return out;
 }
 
+function _fijarEstadoGlobal(nuevo) {
+    _estadoGlobal = nuevo;
+    _suscriptoresEstado.forEach(cb => { try { cb(nuevo); } catch (e) {} });
+}
+function estadoGlobal() { return _estadoGlobal; }
+function onEstadoGlobalCambia(cb) { _suscriptoresEstado.push(cb); cb(_estadoGlobal); }
+
+function _recalcularEstado() {
+    let e;
+    if (!servidorDisponible()) e = 'inactivo';
+    else if (_enVuelo > 0) e = 'sincronizando';
+    else if (_errorEscritura) e = 'error';
+    else if (_conexion === 'caida') e = 'error';
+    else if (_conexion === 'ok') e = 'ok';
+    else e = 'inactivo';
+    if (e !== _estadoGlobal) _fijarEstadoGlobal(e);
+}
+
+function detalleSync() {
+    return { estado: _estadoGlobal, error: _errorEscritura || (_conexion === 'caida' ? 'Sin conexión con el servidor' : ''), ultimoOk: _ultimoOk, enVuelo: _enVuelo, conexion: _conexion };
+}
+
+async function verificarConexion() {
+    if (!servidorDisponible()) { _conexion = 'desconocida'; _recalcularEstado(); return false; }
+    try {
+        await _llamarConTimeout('apiPing', 12000, []);
+        _conexion = 'ok';
+        if (!_ultimoOk) _ultimoOk = Date.now();
+        _recalcularEstado();
+        return true;
+    } catch (e) {
+        _conexion = 'caida';
+        _recalcularEstado();
+        return false;
+    }
+}
+
+let _sincronizando = false;
+
+async function sincronizarAhora(onEstado) {
+    if (_sincronizando) return { ok: false, ocupado: true };
+    if (!servidorDisponible()) return { ok: false, motivo: 'sin_servidor', errores: 1, detalle: ['Sin conexión con el servidor'] };
+    _sincronizando = true;
+    _enVuelo++;
+    _recalcularEstado();
+    const fallos = [];
+    let r = { ok: 0, err: 0, registros: 0 };
+    try {
+        r = await subirTodoNuevo(function (et, tipo, cantidad, detalle) {
+            if (tipo !== 'ok') fallos.push(et + ': ' + (detalle || 'error'));
+            if (onEstado) onEstado(et, tipo, cantidad, detalle);
+        });
+    } catch (e) {
+        fallos.push(e.message || String(e));
+        r.err++;
+    }
+    _enVuelo--;
+    _sincronizando = false;
+    if (r.err) {
+        _errorEscritura = fallos[0] || 'Error al sincronizar';
+        _conexion = 'ok';
+    } else {
+        _errorEscritura = '';
+        _conexion = 'ok';
+        _ultimoOk = Date.now();
+    }
+    _recalcularEstado();
+    return { ok: r.err === 0, modulos: r.ok, errores: r.err, registros: r.registros, detalle: fallos };
+}
+
+const _PILDORA = {
+    inactivo: { clase: '', texto: '☁ Local', titulo: 'Sin conexión con la nube: los datos quedan solo en este navegador' },
+    ok: { clase: 'ok', texto: '☁ OK', titulo: 'Conectado a la nube' },
+    sincronizando: { clase: 'pend', texto: '☁ …', titulo: 'Enviando cambios a la nube…' },
+    pendiente: { clase: 'pend', texto: '☁ …', titulo: 'Cambios por enviar' },
+    error: { clase: 'err', texto: '☁ Error', titulo: 'No se pudo sincronizar' }
+};
+
+function _hora(ms) {
+    if (!ms) return '';
+    const d = new Date(ms);
+    return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+}
+
+function montarSyncGlobal(host) {
+    if (!host) return;
+    host.innerHTML = '<div class="sy-wrap">' +
+        '<span class="sy" id="hdrSync" role="status"></span>' +
+        '<button type="button" class="syncnow" id="hdrSyncNow" title="Sincronizar ahora"><span>↻</span></button>' +
+        '</div>';
+    const pil = host.querySelector('#hdrSync');
+    const btn = host.querySelector('#hdrSyncNow');
+
+    function pintar(estado) {
+        const p = _PILDORA[estado] || _PILDORA.inactivo;
+        const d = detalleSync();
+        pil.className = 'sy' + (p.clase ? ' ' + p.clase : '');
+        pil.textContent = (estado === 'error' && d.conexion === 'caida' && !_errorEscritura) ? '☁ Sin conexión' : p.texto;
+        let t = p.titulo;
+        if (estado === 'error' && d.error) t += ': ' + d.error;
+        if (estado === 'ok' && d.ultimoOk) t += ' · última actividad ' + _hora(d.ultimoOk);
+        pil.title = t;
+    }
+    onEstadoGlobalCambia(pintar);
+
+    pil.addEventListener('click', async function () {
+        if (!servidorDisponible()) { __X.toast('Modo local: no hay conexión con la nube desde este navegador', 'warn'); return; }
+        const ok = await verificarConexion();
+        const d = detalleSync();
+        if (!ok) __X.toast('Sin conexión con la nube', 'error');
+        else if (d.error) __X.toast('Conectado, pero hay un error pendiente: ' + d.error, 'error', 6000);
+        else __X.toast('Conectado a la nube' + (d.ultimoOk ? ' · última actividad ' + _hora(d.ultimoOk) : ''), 'success');
+    });
+
+    btn.addEventListener('click', async function () {
+        if (btn.classList.contains('run')) return;
+        if (!servidorDisponible()) { __X.toast('Modo local: no hay conexión con la nube desde este navegador', 'warn'); return; }
+        btn.className = 'syncnow run';
+        const r = await sincronizarAhora();
+        btn.className = 'syncnow ' + (r.ok ? 'ok' : 'err');
+        if (r.ocupado) { btn.className = 'syncnow run'; return; }
+        if (r.ok) __X.toast('Sincronizado con la nube (' + r.registros + ' registro(s) revisados)', 'success');
+        else __X.toast('Sincronización con errores: ' + (r.detalle && r.detalle[0] ? r.detalle[0] : 'revisa la conexión'), 'error', 7000);
+        setTimeout(function () { btn.className = 'syncnow'; }, 2200);
+        if (__X.refrescarCampana) __X.refrescarCampana();
+    });
+
+    verificarConexion();
+    setInterval(verificarConexion, 60000);
+    window.addEventListener('online', verificarConexion);
+    window.addEventListener('offline', function () { _conexion = 'caida'; _recalcularEstado(); });
+}
+__X.sincronizarAhora = sincronizarAhora; __X.detalleSync = detalleSync; __X.verificarConexion = verificarConexion;
+__X.montarSyncGlobal = montarSyncGlobal;
+__X.estadoGlobal = estadoGlobal; __X.onEstadoGlobalCambia = onEstadoGlobalCambia; __X._fijarEstadoGlobal = _fijarEstadoGlobal;
 __X.auditarFuentesCuentasCorrientes = auditarFuentesCuentasCorrientes;
 __X.auditarSincronizacion = auditarSincronizacion;
 __X.CATEGORIAS_DIAGNOSTICO = CATEGORIAS_DIAGNOSTICO;
@@ -3524,6 +3718,7 @@ __X.registrarMotorAccion = registrarMotorAccion; __X.accionSiguiente = accionSig
 })();
 
 (function(){
+const { _fijarEstadoGlobal } = __X;
 const { store } = __X;
 
 const KEY_URL = 'pos_sheets_url';
@@ -3554,6 +3749,16 @@ async function cargarConfig() {
                 _apiKey = cfg.apiKey || '';
                 await store.set(KEY_URL, _url);
                 await store.set(KEY_API, _apiKey);
+            }
+        } catch (e) {  }
+    }
+
+    if (!_url) {
+        try {
+            const u = (typeof window !== 'undefined' && (window.__RDM_RPC_URL || window.localStorage.getItem('rdm_rpc_url'))) || '';
+            if (u && u.indexOf('script.google.com') !== -1) {
+                _url = u;
+                await store.set(KEY_URL, _url);
             }
         } catch (e) {  }
     }
@@ -3665,15 +3870,6 @@ function bajarHoja(hoja, onDatos, onEstado) {
     });
 }
 
-let _estadoGlobal = 'inactivo';
-const _suscriptoresEstado = [];
-
-function _fijarEstadoGlobal(nuevo) {
-    _estadoGlobal = nuevo;
-    _suscriptoresEstado.forEach(cb => { try { cb(nuevo); } catch (e) {} });
-}
-function estadoGlobal() { return _estadoGlobal; }
-function onEstadoGlobalCambia(cb) { _suscriptoresEstado.push(cb); cb(_estadoGlobal); }
 const MODULOS_SYNC = [];
 
 async function subirModulo(hoja, onEstado) {
@@ -3732,7 +3928,7 @@ async function sincronizarSiDispositivoNuevo() {
     return { accion: 'descargado', ok, err };
 }
 
-__X.cargarConfig = cargarConfig; __X.publicarConfig = publicarConfig; __X.sincronizarSiDispositivoNuevo = sincronizarSiDispositivoNuevo; __X.estadoSync = estadoSync; __X.guardarUrl = guardarUrl; __X.guardarApiKey = guardarApiKey; __X.subirHoja = subirHoja; __X.bajarHoja = bajarHoja; __X.estadoGlobal = estadoGlobal; __X.onEstadoGlobalCambia = onEstadoGlobalCambia;
+__X.cargarConfig = cargarConfig; __X.publicarConfig = publicarConfig; __X.sincronizarSiDispositivoNuevo = sincronizarSiDispositivoNuevo; __X.estadoSync = estadoSync; __X.guardarUrl = guardarUrl; __X.guardarApiKey = guardarApiKey; __X.subirHoja = subirHoja; __X.bajarHoja = bajarHoja;
 async function bajarTodo(onEstado) {
     await cargarConfig();
     if (!_enabled) {
@@ -3751,35 +3947,7 @@ async function bajarTodo(onEstado) {
 
 __X.MODULOS_SYNC = MODULOS_SYNC; __X.subirModulo = subirModulo; __X.bajarModulo = bajarModulo; __X.subirTodo = subirTodo; __X.bajarTodo = bajarTodo;
 
-function montarSyncGlobal(host) {
-    if (!host) return;
-    host.innerHTML = '<button id="btnSyncGlobal" title="Sincronizar con la nube" ' +
-        'style="background:none;border:none;cursor:pointer;font-size:16px;padding:2px 6px;opacity:0.7;">☁️</button>';
-    var btn = host.querySelector('#btnSyncGlobal');
-    var trabajando = false;
-    btn.addEventListener('click', async function() {
-        if (trabajando) return;
-        trabajando = true;
-        btn.style.opacity = '1';
-        btn.textContent = '🔄';
-        btn.title = 'Descargando…';
-        var r = await bajarTodo(function(txt, tipo) {
-            btn.title = txt;
-        });
-        if (r.ok) {
-            btn.textContent = '✅';
-            btn.title = r.descargados + ' módulo(s) sincronizados';
-            __X.toast(r.descargados + ' módulo(s) descargados de la nube', 'success');
-        } else {
-            btn.textContent = '⚠️';
-            btn.title = r.motivo === 'sin_config' ? 'Sincronización no configurada' : 'Error al sincronizar';
-            if (r.motivo === 'sin_config') __X.toast('Sincronización aún no configurada por el administrador', 'warn');
-            else __X.toast('Error al sincronizar', 'error');
-        }
-        setTimeout(function() { btn.textContent = '☁️'; btn.style.opacity = '0.7'; trabajando = false; }, 4000);
-    });
-}
-__X.montarSyncGlobal = montarSyncGlobal;
+
 })();
 
 (function(){
@@ -26133,47 +26301,43 @@ __X.renderDashboard = renderDashboard;
 })();
 
 (function(){
-const { escH } = __X;
+const { escH: _eH, toast } = __X;
 const { store } = __X;
 const { getRolActual } = __X;
 const { tienePermisoGranular: tienePermiso } = __X;
 const { pendientesDeRol } = __X;
 
-const KEY = 'notificaciones';
-const MAX = 20;
-
-function _firma(n) { return `${n.tipo}|${n.mensaje}`; }
+const KEY = 'notificaciones_vistas';
+const NIVELES = { Alta: { color: '#b3261e', texto: 'Urgente' }, Media: { color: '#b8740b', texto: 'Atender pronto' }, Baja: { color: '#6b7280', texto: 'Informativa' } };
+const NOMBRE_MODULO = { logistica: 'Logística', cobranza: 'Cobranza', comercial: 'Comercial', finanzas: 'Finanzas', postventa: 'Post Venta', admin: 'Administración' };
 
 async function generarNotificaciones() {
     await store.ready();
     const rol = getRolActual();
-    const previas = await store.lista(KEY);
-    const vistas = new Set(previas.map(_firma));
-
-    let pendientes = [];
-    try { pendientes = await pendientesDeRol(rol); } catch (e) { pendientes = []; }
-
-    const ahora = new Date().toISOString();
-    const nuevas = pendientes
-        .filter(p => p.prioridad === 'Alta')
-        .map(p => ({ id: 'n-' + Math.random().toString(36).slice(2, 9), tipo: p.tipo, mensaje: p.descripcion, modulo: p.modulo, fecha: ahora, leida: false }))
-        .filter(n => !vistas.has(_firma(n)));
-
-    if (!nuevas.length) return previas;
-    const lista = [...nuevas, ...previas].slice(0, MAX);
-    store.guardarLista(KEY, lista);
+    let lista = [];
+    try { lista = await pendientesDeRol(rol); } catch (e) { lista = []; }
+    lista = lista.map(p => ({ id: p.id, nivel: p.prioridad || 'Media', tipo: p.tipo, mensaje: p.descripcion, modulo: p.modulo, fecha: p.fecha || '', accion: 'ir' }));
+    const det = __X.detalleSync ? __X.detalleSync() : null;
+    if (det && det.estado === 'error') {
+        lista.unshift({ id: 'sync-error', nivel: 'Alta', tipo: 'Sincronización', mensaje: 'Los últimos cambios no se enviaron a la nube' + (det.error ? ' (' + det.error + ')' : '') + '. Los datos siguen guardados en este navegador.', modulo: '', fecha: '', accion: 'reintentar' });
+    }
     return lista;
 }
 
+async function _vistas() {
+    const v = await store.get(KEY, []);
+    return Array.isArray(v) ? v : [];
+}
+
 async function noLeidas() {
-    const lista = await store.lista(KEY);
-    return lista.filter(n => !n.leida).length;
+    const lista = await generarNotificaciones();
+    const vistas = new Set(await _vistas());
+    return lista.filter(n => n.nivel !== 'Baja' && !vistas.has(n.id)).length;
 }
 
 async function marcarTodasLeidas() {
-    const lista = await store.lista(KEY);
-    lista.forEach(n => n.leida = true);
-    store.guardarLista(KEY, lista);
+    const lista = await generarNotificaciones();
+    await store.set(KEY, lista.map(n => n.id));
 }
 
 async function montarCampana(host, navegar) {
@@ -26181,42 +26345,69 @@ async function montarCampana(host, navegar) {
     const rol = getRolActual();
     if (!tienePermiso(rol, 'ver_notificaciones')) { host.innerHTML = ''; return; }
 
-    await generarNotificaciones();
-    const pintar = async () => {
-        const n = await noLeidas();
-        host.innerHTML = `<button id="notifBtn" title="Notificaciones"
-            style="background:none;border:none;cursor:pointer;position:relative;font-size:16px;padding:2px 6px;">🔔${
-            n ? `<span style="position:absolute;top:-2px;right:0;background:#dc2626;color:#fff;border-radius:9px;font-size:9px;padding:1px 4px;font-weight:700;">${n}</span>` : ''}</button>
-            <div id="notifPanel" style="display:none;position:absolute;top:46px;right:12px;z-index:1500;background:#fff;border:1px solid #cbd5e1;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.18);width:330px;max-height:60vh;overflow:auto;"></div>`;
+    host.innerHTML = `<button type="button" id="notifBtn" class="bell-btn" title="Notificaciones" aria-label="Notificaciones">🔔<span id="notifBadge" class="bell-badge" style="display:none;"></span></button>
+        <div id="notifPanel" class="bell-panel" style="display:none;"></div>`;
+    const btn = host.querySelector('#notifBtn');
+    const badge = host.querySelector('#notifBadge');
+    const panel = host.querySelector('#notifPanel');
 
-        host.querySelector('#notifBtn').addEventListener('click', async (e) => {
-            e.stopPropagation();
-            const panel = host.querySelector('#notifPanel');
-            const abierto = panel.style.display === 'block';
-            if (abierto) { panel.style.display = 'none'; return; }
-            const lista = await store.lista(KEY);
-            panel.innerHTML = lista.length
-                ? lista.map(x => `<div style="padding:8px 10px;border-bottom:1px solid #f1f5f9;${x.leida ? 'opacity:.6;' : ''}">
-                        <div style="font-size:11px;color:#64748b;">${_eH(x.tipo)} · ${_eH(String(x.fecha).slice(0, 10))}</div>
-                        <div style="font-size:12px;">${_eH(x.mensaje)}</div>
-                        <button class="btn-outline btn-sm" data-nav="${_eH(x.modulo || '')}" style="margin-top:4px;font-size:10px;">Ir →</button>
-                     </div>`).join('')
-                : '<div style="padding:14px;font-size:12px;color:#64748b;">Sin notificaciones.</div>';
-            panel.style.display = 'block';
-            panel.querySelectorAll('[data-nav]').forEach(b => b.addEventListener('click', () => {
-                panel.style.display = 'none';
-                if (b.dataset.nav && navegar) navegar(b.dataset.nav);
-            }));
-            await marcarTodasLeidas();
-            await pintar();
-            host.querySelector('#notifPanel').style.display = 'block';
+    async function actualizarBadge() {
+        const n = await noLeidas();
+        badge.textContent = n > 99 ? '99+' : String(n);
+        badge.style.display = n ? 'block' : 'none';
+        btn.title = n ? n + ' notificación(es) nueva(s)' : 'Sin notificaciones nuevas';
+    }
+
+    async function abrir() {
+        const lista = await generarNotificaciones();
+        const vistas = new Set(await _vistas());
+        const urgentes = lista.filter(n => n.nivel === 'Alta').length;
+        const cuerpo = lista.length
+            ? lista.map(x => {
+                const nv = NIVELES[x.nivel] || NIVELES.Media;
+                const mod = NOMBRE_MODULO[x.modulo] || '';
+                const boton = x.accion === 'reintentar'
+                    ? '<button type="button" class="btn-outline btn-sm" data-reintentar="1">Reintentar ahora</button>'
+                    : (x.modulo ? `<button type="button" class="btn-outline btn-sm" data-nav="${_eH(x.modulo)}">Abrir ${_eH(mod || x.modulo)} →</button>` : '');
+                return `<div class="bell-item" style="border-left-color:${nv.color};">
+                    <div class="bell-meta"><span class="bell-nivel" style="background:${nv.color};">${_eH(nv.texto)}</span> ${_eH(x.tipo || '')}${x.fecha ? ' · ' + _eH(String(x.fecha).slice(0, 10)) : ''}${vistas.has(x.id) ? '' : ' <b class="bell-nuevo">nuevo</b>'}</div>
+                    <div class="bell-msg">${_eH(x.mensaje)}</div>
+                    ${boton}
+                </div>`;
+            }).join('')
+            : '<div class="bell-vacio">✅ Todo al día. No hay nada pendiente para tu rol.</div>';
+        panel.innerHTML = `<div class="bell-cab"><b>Notificaciones</b><span>${lista.length ? lista.length + ' pendiente(s)' + (urgentes ? ' · ' + urgentes + ' urgente(s)' : '') : 'sin pendientes'}</span></div>
+            <div class="bell-ayuda">Se calculan en vivo con los datos del sistema (pedidos, despachos, packing, cobranza, licitaciones y estado de la nube). Desaparecen solas cuando se resuelven.</div>
+            <div class="bell-lista">${cuerpo}</div>`;
+        panel.style.display = 'block';
+        panel.querySelectorAll('[data-nav]').forEach(b => b.addEventListener('click', () => {
+            panel.style.display = 'none';
+            if (navegar) navegar(b.dataset.nav);
+        }));
+        const re = panel.querySelector('[data-reintentar]');
+        if (re) re.addEventListener('click', async () => {
+            re.disabled = true;
+            re.textContent = 'Enviando…';
+            const r = __X.sincronizarAhora ? await __X.sincronizarAhora() : { ok: false };
+            toast(r.ok ? 'Sincronizado con la nube' : 'Sigue sin poder sincronizar', r.ok ? 'success' : 'error');
+            await abrir();
         });
-        document.addEventListener('click', (ev) => {
-            const panel = host.querySelector('#notifPanel');
-            if (panel && !host.contains(ev.target)) panel.style.display = 'none';
-        });
-    };
-    await pintar();
+        await marcarTodasLeidas();
+        await actualizarBadge();
+    }
+
+    btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (panel.style.display === 'block') { panel.style.display = 'none'; return; }
+        await abrir();
+    });
+    document.addEventListener('click', (ev) => {
+        if (!host.contains(ev.target)) panel.style.display = 'none';
+    });
+    __X.refrescarCampana = actualizarBadge;
+    if (__X.onEstadoGlobalCambia) __X.onEstadoGlobalCambia(() => { actualizarBadge(); });
+    setInterval(actualizarBadge, 120000);
+    await actualizarBadge();
 }
 
 __X.generarNotificaciones = generarNotificaciones; __X.noLeidas = noLeidas; __X.marcarTodasLeidas = marcarTodasLeidas; __X.montarCampana = montarCampana;
@@ -26266,18 +26457,6 @@ const { renderReportes } = __X;
 const { renderPostVenta } = __X;
 const { renderCentroOperaciones } = __X;
 
-const ESTADO_ICONO = { inactivo: '', pendiente: '🔄', sincronizando: '🔄', ok: '☁️', error: '⚠️' };
-const ESTADO_TITULO = { inactivo: '', pendiente: 'Guardando cambios…', sincronizando: 'Respaldando en la nube…', ok: 'Respaldado en la nube', error: 'No se pudo respaldar; se reintentará solo' };
-function montarIndicadorRespaldo() {
-    const cont = document.getElementById('syncStatus');
-    if (!cont) return;
-    cloud.onEstadoGlobalCambia((estado) => {
-        const cfg = cloud.estadoSync();
-        if (!cfg.enabled || estado === 'inactivo') { cont.innerHTML = ''; return; }
-        cont.innerHTML = `<span title="${ESTADO_TITULO[estado] || ''}" style="font-size:13px;opacity:${estado === 'ok' ? '0.6' : '1'};">${ESTADO_ICONO[estado] || ''}</span>`;
-    });
-}
-
 function montarSesion() {
     montarSesionHeader(document.getElementById('rolSelector'), () => location.reload());
 }
@@ -26315,7 +26494,6 @@ async function iniciarApp() {
     router.iniciar(document.getElementById('app'));
 }
 
-montarIndicadorRespaldo();
 montarIndicadores();
 cloud.cargarConfig();
 cargarPermisos();
