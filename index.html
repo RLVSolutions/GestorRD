@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Gestor RD Musico · v20261013-1512</title>
+<title>Gestor RD Musico · v20261013-1739</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -573,6 +573,21 @@ window.addEventListener('unhandledrejection', function (ev) {
     } catch (e) {}
     return null;
   };
+  (function () {
+    try {
+      var h = String(location.hash || '');
+      var m = /[#&]acceso=([A-Za-z0-9_-]+)/.exec(h);
+      if (!m) return;
+      var b = m[1].replace(/-/g, '+').replace(/_/g, '/');
+      while (b.length % 4) b += '=';
+      var c = JSON.parse(atob(b));
+      if (c && c.u && c.k && String(c.u).indexOf('https://script.google.com/') === 0) {
+        ALMACEN('rdm_rpc_url', c.u);
+        ALMACEN('rdm_rpc_key', c.k);
+      }
+      history.replaceState(null, '', location.pathname + location.search);
+    } catch (e) {}
+  })();
   function urlServidor() {
     var u = window.__RDM_RPC_URL || ALMACEN('rdm_rpc_url') || '';
     if (!u) {
@@ -619,9 +634,9 @@ window.addEventListener('unhandledrejection', function (ev) {
   function ejecutar(nombre, args, intentos) {
     intentos = intentos || 0;
     var u = urlServidor();
-    if (!u) return Promise.reject(errorConexion('Falta la URL del servidor. Pulse "Reconfigurar conexión".'));
+    if (!u) return Promise.reject(errorConexion('Falta la URL del servidor. Pida un enlace de acceso al administrador.'));
     var k = claveServidor();
-    if (!k) return Promise.reject(errorConexion('Falta la clave de acceso. Pulse "Reconfigurar conexión".'));
+    if (!k) return Promise.reject(errorConexion('Falta la clave de acceso. Pida un enlace de acceso al administrador.'));
     return fetch(u, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -25098,12 +25113,14 @@ async function renderDatosMaestros(box) {
         </div>
         ${_seccionShopify(shop)}
         ${_seccionProxyMP(proxyMP)}
-        ${_seccionSateliteCatalogo(idSat)}`;
+        ${_seccionSateliteCatalogo(idSat)}
+        ${_seccionAccesosColaboradores()}`;
 
     _wireRespaldoAdmin(box);
     _wireShopify(box);
     _wireProxyMP(box);
     _wireSateliteCatalogo(box);
+    _wireAccesosColaboradores(box);
     estadoServidor().then(r => {
         const el = box.querySelector('#srvEstado');
         if (!el) return;
@@ -25406,6 +25423,90 @@ function _seccionSateliteCatalogo(idSat) {
             </div>
             <div class="page-subtitle">⚠️ El campo "marca" no existe hoy en el catálogo de este ERP — viaja vacío hasta que se agregue a la ficha de producto.</div>
         </div>`;
+}
+
+function _sitioSugerido() {
+    try {
+        const g = window.localStorage.getItem('rdm_sitio');
+        if (g) return g;
+        if (/\.github\.io$/.test(location.hostname)) return location.origin + location.pathname;
+    } catch (e) {}
+    return '';
+}
+
+function _seccionAccesosColaboradores() {
+    if (!tienePermiso(getRolActual(), 'admin:configurar_cloud')) return '';
+    return `
+        <div class="section">
+            <h2>🔗 Accesos de colaboradores</h2>
+            <div class="info">Genera un enlace personal para cada colaborador. Al abrirlo por primera vez, el ERP se conecta solo, sin pedir la URL del servidor ni la clave. Puedes revocar a una persona sin afectar a las demás. Solo funciona con la clave maestra de administrador en este equipo.</div>
+            <div class="filter-bar">
+                <div class="filter-field" style="min-width:200px;"><label>Nombre del colaborador</label>
+                    <input id="accNombre" placeholder="Ej: Juan Pérez"></div>
+                <div class="filter-field" style="flex:1;min-width:260px;"><label>URL del sitio (donde está publicado el ERP)</label>
+                    <input id="accSitio" value="${escAttrLocal(_sitioSugerido())}" placeholder="https://usuario.github.io/repositorio/"></div>
+                <div class="filter-field" style="justify-content:flex-end;"><label style="visibility:hidden">.</label>
+                    <button class="btn-success btn-sm" id="accGenerar">🔗 Generar enlace</button></div>
+            </div>
+            <div id="accResultado" style="margin-top:8px;"></div>
+            <div id="accLista" style="margin-top:10px;"></div>
+        </div>`;
+}
+
+function _wireAccesosColaboradores(box) {
+    const btn = box.querySelector('#accGenerar');
+    if (!btn) return;
+    const res = box.querySelector('#accResultado');
+    const lista = box.querySelector('#accLista');
+
+    async function pintarLista() {
+        if (!servidorDisponible()) { lista.innerHTML = '<div class="page-subtitle">Sin conexión con la nube.</div>'; return; }
+        try {
+            const datos = await llamar('apiListarAccesosColaboradores');
+            lista.innerHTML = (datos && datos.length)
+                ? `<table class="data-table"><thead><tr><th>Colaborador</th><th>Creado</th><th></th></tr></thead><tbody>${datos.map(a => `<tr><td><b>${escH(a.nombre)}</b></td><td>${escH(String(a.creado || '').slice(0, 10))}</td><td style="text-align:right;"><button class="btn-outline btn-sm" data-rev="${escAttrLocal(a.nombre)}">Revocar</button></td></tr>`).join('')}</tbody></table>`
+                : '<div class="page-subtitle">Aún no hay accesos individuales.</div>';
+            lista.querySelectorAll('[data-rev]').forEach(b => b.addEventListener('click', async () => {
+                if (!confirm('¿Revocar el acceso de ' + b.dataset.rev + '? Dejará de poder usar el ERP con su enlace.')) return;
+                b.disabled = true;
+                try {
+                    await llamar('apiRevocarAccesoColaborador', b.dataset.rev);
+                    toast('Acceso revocado', 'success');
+                } catch (e) { toast('No se pudo revocar: ' + ((e && e.message) || e), 'error'); }
+                pintarLista();
+            }));
+        } catch (e) {
+            lista.innerHTML = '<div class="warn">' + escH((e && e.message) || String(e)) + '</div>';
+        }
+    }
+
+    btn.addEventListener('click', async () => {
+        if (!servidorDisponible()) { toast('Sin conexión con la nube en este momento', 'warn'); return; }
+        const nombre = box.querySelector('#accNombre').value.trim();
+        const sitio = box.querySelector('#accSitio').value.trim();
+        if (!nombre) { toast('Escribe el nombre del colaborador', 'warn'); return; }
+        if (!/^https:\/\//.test(sitio)) { toast('Escribe la URL completa del sitio (https://…)', 'warn'); return; }
+        let exec = '';
+        try { exec = window.__RDM_RPC_URL || window.localStorage.getItem('rdm_rpc_url') || ''; } catch (e) {}
+        btn.disabled = true;
+        try {
+            try { window.localStorage.setItem('rdm_sitio', sitio); } catch (e) {}
+            const r = await llamar('apiCrearAccesoColaborador', nombre, exec, sitio);
+            res.innerHTML = `<div class="info"><b>Enlace para ${escH(nombre)}</b> (envíaselo solo a esa persona):<br>
+                <input id="accEnlace" readonly style="width:100%;margin-top:6px;" value="${escAttrLocal(r.enlace)}">
+                <div class="toolbar" style="margin-top:6px;"><button class="btn-outline btn-sm" id="accCopiar">📋 Copiar enlace</button></div></div>`;
+            const inp = res.querySelector('#accEnlace');
+            res.querySelector('#accCopiar').addEventListener('click', async () => {
+                try { await navigator.clipboard.writeText(inp.value); toast('Enlace copiado', 'success'); }
+                catch (e) { inp.select(); document.execCommand('copy'); toast('Enlace copiado', 'success'); }
+            });
+            box.querySelector('#accNombre').value = '';
+            pintarLista();
+        } catch (e) {
+            res.innerHTML = '<div class="warn">' + escH((e && e.message) || String(e)) + '</div>';
+        } finally { btn.disabled = false; }
+    });
+    pintarLista();
 }
 
 function _wireSateliteCatalogo(box) {
