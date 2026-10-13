@@ -1,10 +1,9 @@
 <!DOCTYPE html>
 <html lang="es">
-<head> 
-<script>window.__RDM_RPC_URL="https://script.google.com/macros/s/AKfycbxxd9SMCiKR0POUsvb3RbLfQrnZ4om1UIrPw5Rj-WUZxtjEdQYOZdfphAiiBUmbxDrh/exec";</script>    
+<head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Gestor RD Musico · v20261013-0138</title>
+<title>Gestor RD Musico · v20261013-1512</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -3297,8 +3296,13 @@ function casos() {
 function _guardar() { store.guardarLista(KEY, _casos); }
 
 async function _siguienteNumero() {
-    const n = (await store.get(KEY_CORR, 0)) + 1;
-    store.set(KEY_CORR, n);
+    let max = Number(await store.get(KEY_CORR, 0)) || 0;
+    (_casos || []).forEach(function (c) {
+        const m = /(\d+)\s*$/.exec(String((c && c.numero) || ''));
+        if (m) max = Math.max(max, parseInt(m[1], 10));
+    });
+    const n = max + 1;
+    await store.set(KEY_CORR, n);
     return PREFIJO + '-' + String(n).padStart(4, '0');
 }
 
@@ -3334,7 +3338,7 @@ function slaCaso(caso) {
 
 async function crearCaso(datos, usuario) {
     await store.ready();
-    if (!_casos.length) _casos = await store.lista(KEY);
+    try { await cargarCasos(); } catch (e) { if (!_casos.length) _casos = await store.lista(KEY); }
     const ahora = new Date().toISOString();
     const numero = await _siguienteNumero();
 
