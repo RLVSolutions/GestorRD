@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Gestor RD Musico · v20261013-1739</title>
+<title>Gestor RD Musico · v2.2</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -573,36 +573,38 @@ window.addEventListener('unhandledrejection', function (ev) {
     } catch (e) {}
     return null;
   };
-  (function () {
+  function leerEnlace(texto) {
     try {
-      var h = String(location.hash || '');
-      var m = /[#&]acceso=([A-Za-z0-9_-]+)/.exec(h);
-      if (!m) return;
+      var m = /[#&]?acceso=([A-Za-z0-9_-]+)/.exec(String(texto || ''));
+      if (!m) return false;
       var b = m[1].replace(/-/g, '+').replace(/_/g, '/');
       while (b.length % 4) b += '=';
       var c = JSON.parse(atob(b));
       if (c && c.u && c.k && String(c.u).indexOf('https://script.google.com/') === 0) {
         ALMACEN('rdm_rpc_url', c.u);
         ALMACEN('rdm_rpc_key', c.k);
+        return true;
       }
-      history.replaceState(null, '', location.pathname + location.search);
     } catch (e) {}
-  })();
-  function urlServidor() {
-    var u = window.__RDM_RPC_URL || ALMACEN('rdm_rpc_url') || '';
-    if (!u) {
-      u = (window.prompt('Pegue la URL /exec del servidor del ERP') || '').trim();
-      if (u) ALMACEN('rdm_rpc_url', u);
-    }
-    return u;
+    return false;
   }
-  function claveServidor() {
-    var k = ALMACEN('rdm_rpc_key') || '';
-    if (!k) {
-      k = (window.prompt('Clave de acceso al servidor') || '').trim();
-      if (k) ALMACEN('rdm_rpc_key', k);
+  (function () {
+    if (leerEnlace(location.hash)) {
+      try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
     }
-    return k;
+  })();
+  function urlServidor() { return window.__RDM_RPC_URL || ALMACEN('rdm_rpc_url') || ''; }
+  function claveServidor() { return ALMACEN('rdm_rpc_key') || ''; }
+  function pegarEnlace() {
+    var t = (window.prompt('Pegue aquí el enlace de acceso que le envió el administrador') || '').trim();
+    if (!t) return;
+    if (leerEnlace(t)) { location.reload(); return; }
+    if (t.indexOf('https://script.google.com/') === 0) {
+      var k = (window.prompt('Clave de acceso al servidor') || '').trim();
+      if (k) { ALMACEN('rdm_rpc_url', t); ALMACEN('rdm_rpc_key', k); location.reload(); }
+      return;
+    }
+    window.alert('El enlace no es válido. Pida uno nuevo al administrador.');
   }
   function aviso(texto) {
     var d = document.getElementById('rdmAviso');
@@ -614,9 +616,9 @@ window.addEventListener('unhandledrejection', function (ev) {
       t.id = 'rdmAvisoTxt';
       t.style.flex = '1';
       var b = document.createElement('button');
-      b.textContent = 'Reconfigurar conexión';
+      b.textContent = 'Pegar enlace de acceso';
       b.style.cssText = 'background:#fff;color:#b3261e;border:0;border-radius:6px;padding:6px 10px;font-weight:700;cursor:pointer';
-      b.onclick = function () { ALMACEN('rdm_rpc_url', null); ALMACEN('rdm_rpc_key', null); location.reload(); };
+      b.onclick = function () { pegarEnlace(); };
       d.appendChild(t);
       d.appendChild(b);
       (document.body || document.documentElement).appendChild(d);
@@ -634,9 +636,9 @@ window.addEventListener('unhandledrejection', function (ev) {
   function ejecutar(nombre, args, intentos) {
     intentos = intentos || 0;
     var u = urlServidor();
-    if (!u) return Promise.reject(errorConexion('Falta la URL del servidor. Pida un enlace de acceso al administrador.'));
+    if (!u) return Promise.reject(errorConexion('Este equipo aún no está conectado. Abra el enlace de acceso que le envió el administrador o péguelo con el botón.'));
     var k = claveServidor();
-    if (!k) return Promise.reject(errorConexion('Falta la clave de acceso. Pida un enlace de acceso al administrador.'));
+    if (!k) return Promise.reject(errorConexion('Este equipo aún no está conectado. Abra el enlace de acceso que le envió el administrador o péguelo con el botón.'));
     return fetch(u, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -19978,7 +19980,9 @@ const GETTERS = {
     tipoSolicitud: c => c.tipoSolicitud || '',
     estado: c => ESTADOS_PV[c.estado] ? ESTADOS_PV[c.estado].label : '',
     proveedor: c => c.proveedor || '',
-    garantia: c => c.garantiaVigente ? 'Vigente' : 'Vencida'
+    garantia: c => c.garantiaVigente ? 'Vigente' : 'Vencida',
+    sucursal: c => c.sucursal || '',
+    creador: c => c.responsable || ''
 };
 
 async function renderPostVenta(cont) {
@@ -20501,6 +20505,7 @@ function _priorizarCasos(items) {
 }
 
 var _vigCasos = 'vigente';
+var _soloMios = false;
 
 function _lista(box, modo) {
     _box = box;
@@ -20535,7 +20540,8 @@ function _lista(box, modo) {
         (conVigencia ? __X.tabsVigencia(_vigCasos, nVigCasos, nHistCasos, 'pvVig') : '') +
         '<div class="toolbar">' +
             (tienePermiso(rol, 'postventa:crear') ? '<button class="btn-success btn-sm" id="pvNuevo">➕ Nuevo caso</button>' : '') +
-            '<input id="pvBuscar" placeholder="Buscar por N°, cliente, RUT, SKU, descripción, serie, marca, modelo…" style="max-width:320px;">' +
+            '<input id="pvBuscar" placeholder="Buscar por N°, cliente, RUT, SKU, descripción, serie, marca, modelo, sucursal, creador…" style="max-width:320px;">' +
+            '<label style="display:flex;align-items:center;gap:5px;margin:0;white-space:nowrap;font-weight:600;"><input type="checkbox" id="pvMios"' + (_soloMios ? ' checked' : '') + '> Solo mis casos</label>' +
             '<span class="sep"></span>' +
             '<div class="filter-field" style="flex-direction:row;align-items:center;gap:6px;margin:0;white-space:nowrap;">' +
             '<label style="margin:0;white-space:nowrap;font-weight:600;">Enviar a</label>' +
@@ -20548,7 +20554,7 @@ function _lista(box, modo) {
             '<thead><tr>' +
                 '<th style="width:28px;"><input type="checkbox" id="pvAll" title="Seleccionar todos"></th>' +
                 '<th>N° Caso' + icono('numero') + '</th><th>Código' + icono('sku') + '</th><th>Descripción' + icono('descripcion') + '</th>' +
-                '<th>Fecha</th><th>Cliente' + icono('cliente') + '</th>' +
+                '<th>Fecha</th><th>Sucursal' + icono('sucursal') + '</th><th>Creado por' + icono('creador') + '</th><th>Cliente' + icono('cliente') + '</th>' +
                 '<th>Solicitud' + icono('tipoSolicitud') + '</th>' +
                 '<th>Garantía' + icono('garantia') + '</th><th>SLA</th><th>Estado' + icono('estado') + '</th><th></th>' +
             '</tr></thead>' +
@@ -20563,7 +20569,12 @@ function _lista(box, modo) {
     var pintar = function() {
         var q = (box.querySelector('#pvBuscar').value || '').toLowerCase().trim();
         var res = items;
-        if (q) res = res.filter(c => [c.numero, c.cliente, c.rut, c.serie, c.modelo, c.marca, c.sku, c.descripcion]
+        if (_soloMios) {
+            var uAct = getUsuarioActual();
+            var nAct = uAct ? uAct.nombre : '';
+            res = res.filter(c => c.responsable === nAct);
+        }
+        if (q) res = res.filter(c => [c.numero, c.cliente, c.rut, c.serie, c.modelo, c.marca, c.sku, c.descripcion, c.sucursal, c.responsable]
             .some(v => String(v || '').toLowerCase().indexOf(q) !== -1));
         res = aplicarFiltros(res, _colf, GETTERS);
         var total = res.length;
@@ -20580,6 +20591,8 @@ function _lista(box, modo) {
                     '<td>' + escH(c.sku || '\u2014') + '</td>' +
                     '<td style="font-size:11px;">' + escH(c.descripcion || '\u2014') + '</td>' +
                     '<td style="white-space:nowrap;">' + escH(String(c.fechaCreacion).slice(0, 10)) + '</td>' +
+                    '<td>' + escH(c.sucursal || '—') + '</td>' +
+                    '<td>' + escH(c.responsable || '—') + '</td>' +
                     '<td>' + escH(c.cliente || '—') + '<br><small class="page-subtitle">' + escH(c.rut || '') + '</small></td>' +
                     '<td>' + escH(c.tipoSolicitud || '—') + '</td>' +
                     '<td><span class="badge ' + (c.garantiaVigente ? 'badge-green' : 'badge-red') + '">' + (c.garantiaVigente ? 'Vigente' : 'Vencida') + '</span></td>' +
@@ -20591,7 +20604,7 @@ function _lista(box, modo) {
                         (tienePermiso(rol, 'postventa:eliminar') ? '<button class="btn-icon btn-danger" data-del="' + escAttr(c.id) + '" title="Eliminar">🗑️</button>' : '') +
                     '</td></tr>';
             }).join('') :
-            '<tr><td colspan="12" style="text-align:center;color:#94a3b8;padding:18px;">Sin casos que coincidan.</td></tr>';
+            '<tr><td colspan="14" style="text-align:center;color:#94a3b8;padding:18px;">Sin casos que coincidan.</td></tr>';
 
         if (_pag) _pag.render(box.querySelector('#pvPag'), total, pintar);
         engancharIconos(box, GETTERS, () => items, _colf, () => { if (_pag) _pag.reset(); pintar(); });
@@ -20641,6 +20654,8 @@ function _lista(box, modo) {
     var nb = box.querySelector('#pvNuevo');
     if (nb) nb.addEventListener('click', () => router.navegar('postventa', 'nuevo'));
     box.querySelector('#pvBuscar').addEventListener('input', () => { if (_pag) _pag.reset(); pintar(); });
+    var chkMios = box.querySelector('#pvMios');
+    if (chkMios) chkMios.addEventListener('change', () => { _soloMios = chkMios.checked; if (_pag) _pag.reset(); pintar(); });
     pintar();
 }
 
@@ -21036,7 +21051,7 @@ function _detalle(id, ext) {
     _estilosPV();
     var rol = getRolActual();
     var host = (ext && ext.host) || (_box && _box.querySelector('#pvModal')) || _box;
-    var refrescarVista = function() { if (ext && typeof ext.alCambiar === 'function') ext.alCambiar(); else refrescarVista(); };
+    var refrescarVista = function() { if (ext && typeof ext.alCambiar === 'function') ext.alCambiar(); else _lista(_box, _sub === 'sstt' ? 'sstt' : (_sub === 'rma' ? 'rma' : 'todos')); };
     var e = ESTADOS_PV[c.estado];
     var s = slaCaso(c);
     var siguientes = TRANSICIONES_PV[c.estado] || [];
