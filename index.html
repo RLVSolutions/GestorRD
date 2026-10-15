@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Gestor RD Musico · v2.2</title>
+<title>Gestor RD Musico · v20261015-0222</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -1361,6 +1361,42 @@ function overridesUsuario() {
     return (Array.isArray(ov) && ov.length) ? ov : null;
 }
 
+function _permisosEfectivosDe(u) {
+    if (!u) return [];
+    if (u.rolId === 'administrador') return ['*'];
+    const ov = u.permisosOverrides;
+    if (Array.isArray(ov) && ov.length) return ov;
+    const r = __X.roles()[u.rolId];
+    return r ? (r.permisos || []) : [];
+}
+
+async function usuariosConPermiso(permiso) {
+    await store.ready();
+    const lista = await store.lista(KEY_USUARIOS);
+    return lista
+        .filter(u => u.activo && __X.otorgaPermiso(_permisosEfectivosDe(u), permiso))
+        .map(u => ({ id: u.id, username: u.username, nombre: u.nombre }));
+}
+
+async function verificarCredenciales(username, password, permiso) {
+    await store.ready();
+    const lista = await store.lista(KEY_USUARIOS);
+    const u = lista.find(x => x.username.toLowerCase() === String(username || '').trim().toLowerCase());
+    if (!u || !u.activo) return { ok: false, error: 'Usuario o contraseña incorrectos' };
+    const { hash } = await hashPassword(String(password || ''), u.salt, u.algoritmo);
+    let coincide = hash === u.passwordHash;
+    if (!coincide && !u.algoritmo) {
+        const alt = await hashPassword(String(password || ''), u.salt, 'fallback');
+        coincide = alt.hash === u.passwordHash;
+    }
+    if (!coincide) return { ok: false, error: 'Usuario o contraseña incorrectos' };
+    if (permiso && !__X.otorgaPermiso(_permisosEfectivosDe(u), permiso)) {
+        return { ok: false, error: 'Este usuario no está autorizado para esta operación' };
+    }
+    return { ok: true, usuario: { id: u.id, username: u.username, nombre: u.nombre, rolId: u.rolId } };
+}
+
+__X.usuariosConPermiso = usuariosConPermiso; __X.verificarCredenciales = verificarCredenciales;
 __X.hashPassword = hashPassword; __X.cargarUsuarios = cargarUsuarios; __X.migrarUsuariosSiHaceFalta = migrarUsuariosSiHaceFalta; __X.guardarUsuario = guardarUsuario; __X.eliminarUsuario = eliminarUsuario; __X.alternarActivo = alternarActivo; __X.login = login; __X.sincronizarUsuarios = sincronizarUsuarios; __X.respaldarUsuarios = respaldarUsuarios; __X.logout = logout; __X.restaurarSesion = restaurarSesion; __X.getUsuarioActual = getUsuarioActual; __X.isAutenticado = isAutenticado; __X.getRolActual = getRolActual; __X.setRolActual = setRolActual; __X.overridesUsuario = overridesUsuario;
 })();
 
@@ -18405,6 +18441,7 @@ function _dibujar(){
             <button class="btn-outline btn-sm" id="btnColsCC">⚙️ Configurar columnas</button>
             <button class="btn-secondary btn-sm" id="btnObsMasiva">📝 Obs. masiva</button>
             ${_puede('finanzas:registrar_nc') ? '<button class="btn-secondary btn-sm" id="btnAplicarNC">🔗 Buscar y aplicar N/C</button>' : ''}
+            ${(_puede('finanzas:registrar_pago') || _puede('finanzas:ver')) ? '<button class="btn-secondary btn-sm" id="btnPagoMasivo" title="Carga un Excel o pega celdas con Fecha, Descripción, Revisar, Abonos y Factura y aplica los pagos a las facturas">💵 Pago masivo</button>' : ''}
             <button class="btn-outline btn-sm" id="btnDuplicadosCC" title="Busca documentos con el mismo RUT + Número + Tipo de Documento (mismo folio) y permite fusionarlos en uno solo.">🧬 Revisar duplicados</button>
             <button class="btn-primary btn-sm" id="btnRecalcularCartera" title="Reclasifica el riesgo (A/B/C/D) de todos los clientes con la cartera actual. Es la misma clasificación que usan los KPIs de esta pantalla y Comercial → Cartera.">🔄 Recalcular cartera</button>
             <span class="badge badge-amber" id="badgeCandidatosCobranza" style="display:none;cursor:pointer;" title="Documentos vencidos con saldo pendiente que aún no se han enviado a Cobranza"></span>
@@ -18517,6 +18554,7 @@ function _dibujar(){
     if (badgeCob) badgeCob.addEventListener('click', () => _revisarCandidatosCobranza());
     _bind('#btnObsMasiva', () => obsMasiva(_seleccionados(), g('#finModal'), _tabla));
     _bind('#btnAplicarNC', () => aplicarNotaCredito(g('#finModal'), _tabla));
+    _bind('#btnPagoMasivo', () => __X.abrirPagoMasivoCC(g('#finModal'), _tabla));
     _bind('#btnDuplicadosCC', () => revisarDuplicadosCC(g('#finModal'), _tabla));
 _bind('#btnDerivar', async () => { try {
         const sel = _seleccionados();
@@ -19719,6 +19757,352 @@ function _devolver(){
 __X.correosArea = correosArea;
 __X.urlNotificarArea = urlNotificarArea;
 __X.renderFacturacion = renderFacturacion;
+})();
+
+(function(){
+const { escH, escAttr, toast, formatCLP, store } = __X;
+const CC = __X;
+
+const CLAVE_TMP = 'cc_pago_masivo_tmp';
+const DIAS_TMP = 7;
+const PERMISO = 'finanzas:registrar_pago';
+
+function _norm(s) { return String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim(); }
+
+function _monto(v) {
+    if (typeof v === 'number') return Math.round(v);
+    let s = String(v == null ? '' : v).replace(/[^\d.,-]/g, '');
+    if (!s) return 0;
+    const neg = s.charAt(0) === '-';
+    s = s.replace(/-/g, '');
+    if (s.indexOf(',') !== -1 && s.indexOf('.') !== -1) s = s.replace(/\./g, '').replace(',', '.');
+    else if (s.indexOf(',') !== -1) s = /,\d{1,2}$/.test(s) ? s.replace(',', '.') : s.replace(/,/g, '');
+    else if (s.indexOf('.') !== -1 && /\.\d{3}(\.|$)/.test(s)) s = s.replace(/\./g, '');
+    const n = parseFloat(s);
+    return isNaN(n) ? 0 : Math.round(neg ? -n : n);
+}
+
+function _fecha(v) {
+    if (typeof v === 'number' && v > 20000 && v < 80000) return new Date(Math.round((v - 25569) * 86400000)).toISOString().slice(0, 10);
+    const t = String(v == null ? '' : v).trim();
+    let m = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})/.exec(t);
+    if (m) {
+        const a = m[3].length === 2 ? '20' + m[3] : m[3];
+        return a + '-' + m[2].padStart(2, '0') + '-' + m[1].padStart(2, '0');
+    }
+    m = /^(\d{4})-(\d{2})-(\d{2})/.exec(t);
+    return m ? m[0] : '';
+}
+
+function _numFactura(v) { return String(v == null ? '' : v).replace(/[^\d]/g, '').replace(/^0+/, ''); }
+function _rutNorm(v) { return String(v == null ? '' : v).replace(/[^0-9kK]/g, '').toUpperCase(); }
+function _rutDeTexto(t) {
+    const m = /(\d{1,2}(?:\.\d{3}){2}|\d{7,8})\s*-\s*([\dkK])/.exec(String(t || ''));
+    return m ? _rutNorm(m[1] + m[2]) : '';
+}
+
+function _incluye(v) {
+    const t = _norm(v);
+    return !(t === 'no' || t === 'n' || t === '0' || t === 'false');
+}
+
+function _leerTexto(texto) {
+    const lineas = String(texto || '').split(/\r?\n/).filter(l => l.trim() !== '');
+    if (!lineas.length) return [];
+    const sep = lineas[0].indexOf('\t') !== -1 ? '\t' : (lineas[0].indexOf(';') !== -1 ? ';' : ',');
+    return lineas.map(l => l.split(sep).map(c => c.replace(/^"|"$/g, '').trim()));
+}
+
+function _filasDesdeMatriz(matriz) {
+    let ini = 0;
+    let col = { fecha: 0, desc: 1, revisar: 2, abono: 3, factura: 4 };
+    let conCabecera = false;
+    for (let i = 0; i < Math.min(matriz.length, 10); i++) {
+        const celdas = matriz[i].map(_norm);
+        const iFac = celdas.findIndex(c => /^fac/.test(c) || c.indexOf('factura') !== -1 || c.indexOf('facrura') !== -1);
+        const iAbo = celdas.findIndex(c => c.indexOf('abono') !== -1 || c === 'monto' || c.indexOf('pago') !== -1 || c.indexOf('importe') !== -1);
+        if (iFac !== -1 && iAbo !== -1) {
+            col = {
+                fecha: celdas.findIndex(c => c.indexOf('fecha') !== -1),
+                desc: celdas.findIndex(c => c.indexOf('descrip') !== -1 || c.indexOf('glosa') !== -1 || c.indexOf('detalle') !== -1),
+                revisar: celdas.findIndex(c => c.indexOf('revis') !== -1),
+                abono: iAbo,
+                factura: iFac
+            };
+            ini = i + 1;
+            conCabecera = true;
+            break;
+        }
+    }
+    if (!conCabecera && (!matriz.length || matriz[0].length < 5)) return { error: 'No se reconocieron las columnas. Se esperan: Fecha, Descripción, Revisar, Abonos, Factura.' };
+    const filas = [];
+    for (let i = ini; i < matriz.length; i++) {
+        const r = matriz[i];
+        const get = k => (col[k] >= 0 && col[k] < r.length) ? r[col[k]] : '';
+        if (r.every(c => String(c == null ? '' : c).trim() === '')) continue;
+        filas.push({
+            n: i + 1,
+            fechaTxt: get('fecha'),
+            fecha: _fecha(get('fecha')),
+            desc: String(get('desc') || '').trim(),
+            incluir: col.revisar >= 0 ? _incluye(get('revisar')) : true,
+            monto: _monto(get('abono')),
+            factura: _numFactura(get('factura')),
+            facturaTxt: String(get('factura') == null ? '' : get('factura')).trim()
+        });
+    }
+    return { filas };
+}
+
+function _analizar(filas) {
+    const hoy = new Date().toISOString().slice(0, 10);
+    const docs = (CC.docs ? CC.docs() : []).filter(d => d.tipoDoc !== 'NC');
+    const porFactura = {};
+    docs.forEach(d => {
+        const k = _numFactura(d.factura || d.numero);
+        if (k) (porFactura[k] = porFactura[k] || []).push(d);
+    });
+    const acumulado = {};
+    return filas.map(f => {
+        const r = Object.assign({}, f, { fecha: f.fecha || hoy, doc: null, estado: '', texto: '', marcar: false });
+        const rut = _rutDeTexto(f.desc);
+        if (!f.factura) { r.estado = 'invalido'; r.texto = 'Sin número de factura'; return r; }
+        if (f.monto <= 0) { r.estado = 'invalido'; r.texto = 'Abono sin monto válido'; return r; }
+        let cand = porFactura[f.factura] || [];
+        if (!cand.length) { r.estado = 'noencontrada'; r.texto = 'Factura no encontrada en Cuentas Corrientes'; return r; }
+        if (cand.length > 1 && rut) {
+            const filtrados = cand.filter(d => _rutNorm(d.rut) === rut);
+            if (filtrados.length) cand = filtrados;
+        }
+        if (cand.length > 1) { r.estado = 'ambigua'; r.texto = 'Hay ' + cand.length + ' documentos con ese número; no se puede elegir uno'; return r; }
+        const d = cand[0];
+        r.doc = d;
+        if (rut && _rutNorm(d.rut) !== rut) { r.estado = 'rutdif'; r.texto = 'El RUT de la descripción no coincide con el del documento (' + (d.rut || '—') + ')'; return r; }
+        const saldo = (d.saldo || 0) - (acumulado[d.id] || 0);
+        const ref = r.desc.slice(0, 80);
+        const dup = (d.movimientos || []).some(m => m.tipo === 'PAGO' && m.estado !== 'REVERSADO' && Math.round(m.monto) === f.monto && m.fecha === r.fecha && String(m.referencia || '') === ref);
+        if (dup) { r.estado = 'duplicado'; r.texto = 'Ya existe un pago idéntico (misma fecha, monto y descripción)'; return r; }
+        if (saldo <= 0) { r.estado = 'pagada'; r.texto = 'La factura no tiene saldo pendiente'; return r; }
+        acumulado[d.id] = (acumulado[d.id] || 0) + f.monto;
+        r.saldoAntes = saldo;
+        if (f.monto > saldo) { r.estado = 'sobrepago'; r.texto = 'El abono supera el saldo (' + formatCLP(saldo) + ')'; return r; }
+        if (f.monto < saldo) { r.estado = 'parcial'; r.texto = 'Pago parcial; quedará saldo de ' + formatCLP(saldo - f.monto); r.marcar = f.incluir; return r; }
+        r.estado = 'ok'; r.texto = 'Cancela la factura'; r.marcar = f.incluir;
+        return r;
+    });
+}
+
+const ETIQUETA = {
+    ok: ['✅', '#1b7a3d'], parcial: ['🟡', '#b8740b'], sobrepago: ['⚠️', '#b3261e'], pagada: ['⚠️', '#b8740b'],
+    noencontrada: ['❌', '#b3261e'], ambigua: ['⚠️', '#b3261e'], rutdif: ['⚠️', '#b3261e'], duplicado: ['⚠️', '#b8740b'], invalido: ['❌', '#b3261e']
+};
+
+async function _purgarTmp() {
+    try {
+        const t = await store.get(CLAVE_TMP, null);
+        if (t && t.guardado && (Date.now() - new Date(t.guardado).getTime()) > DIAS_TMP * 86400000) await store.remove(CLAVE_TMP);
+    } catch (e) {}
+}
+
+async function abrirPagoMasivoCC(host, onChange) {
+    if (!host) return;
+    await _purgarTmp();
+    let tmp = null;
+    try { tmp = await store.get(CLAVE_TMP, null); } catch (e) {}
+    let estado = { archivo: '', matriz: null, filas: [] };
+    let fallos = 0;
+
+    const cerrar = () => { host.innerHTML = ''; };
+
+    const vistaCarga = () => {
+        host.innerHTML = `
+        <div class="modal open"><div class="modal-panel modal-panel-xl">
+            <div class="modal-header"><h3>💵 Pago masivo de facturas</h3><button class="modal-close" id="pmX">✕</button></div>
+            <div class="modal-body">
+                <div class="info">Cargue un Excel o pegue las celdas con las columnas <b>Fecha · Descripción · Revisar · Abonos · Factura</b>. El sistema busca cada número de factura en Cuentas Corrientes y le muestra qué pagos se aplicarían antes de registrar nada. Las filas con Revisar = «No» quedan sin marcar.</div>
+                <div class="filter-bar">
+                    <div class="filter-field" style="flex:1;min-width:240px;"><label>Archivo (.xlsx, .xls, .csv)</label><input type="file" id="pmArchivo" accept=".xlsx,.xls,.xlsm,.csv"></div>
+                </div>
+                <div class="filter-field"><label>…o pegue aquí las celdas copiadas desde Excel</label>
+                    <textarea id="pmPegado" rows="6" placeholder="Fecha&#9;Descripción&#9;Revisar&#9;Abonos&#9;Factura"></textarea></div>
+                <label style="display:flex;align-items:center;gap:6px;margin-top:8px;"><input type="checkbox" id="pmGuardar"> Conservar este archivo en este equipo por ${DIAS_TMP} días (si no, se descarta al cerrar)</label>
+                ${tmp && tmp.matriz ? `<div style="margin-top:8px;"><button class="btn-outline btn-sm" id="pmRecuperar">↩ Recuperar último archivo guardado (${escH(tmp.archivo || 'pegado')} · ${escH(String(tmp.guardado || '').slice(0, 10))})</button> <button class="btn-outline btn-sm" id="pmDescartar">🗑 Descartar guardado</button></div>` : ''}
+                <div id="pmMsg" style="margin-top:8px;"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-outline btn-sm" id="pmCancel">Cancelar</button>
+                <button class="btn-success btn-sm" id="pmAnalizar">🔍 Analizar</button>
+            </div>
+        </div></div>`;
+        const q = s => host.querySelector(s);
+        const msg = t => { q('#pmMsg').innerHTML = '<div class="warn">' + escH(t) + '</div>'; };
+        q('#pmX').onclick = cerrar;
+        q('#pmCancel').onclick = cerrar;
+        const rec = q('#pmRecuperar');
+        if (rec) rec.onclick = () => { estado = { archivo: tmp.archivo || '', matriz: tmp.matriz, filas: [] }; procesar(); };
+        const des = q('#pmDescartar');
+        if (des) des.onclick = async () => { await store.remove(CLAVE_TMP); tmp = null; vistaCarga(); };
+        q('#pmAnalizar').onclick = async () => {
+            const arch = q('#pmArchivo').files[0];
+            const pegado = q('#pmPegado').value;
+            try {
+                if (arch) {
+                    if (typeof XLSX === 'undefined') { msg('La librería de Excel no cargó. Pegue las celdas en su lugar.'); return; }
+                    const buf = await arch.arrayBuffer();
+                    const wb = /\.csv$/i.test(arch.name)
+                        ? XLSX.read(new TextDecoder('utf-8').decode(new Uint8Array(buf)), { type: 'string' })
+                        : XLSX.read(new Uint8Array(buf), { type: 'array', cellDates: false });
+                    const ws = wb.Sheets[wb.SheetNames[0]];
+                    estado = { archivo: arch.name, matriz: XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' }), filas: [] };
+                } else if (pegado.trim()) {
+                    estado = { archivo: 'pegado', matriz: _leerTexto(pegado), filas: [] };
+                } else { msg('Seleccione un archivo o pegue las celdas.'); return; }
+                if (q('#pmGuardar').checked) {
+                    try { await store.set(CLAVE_TMP, { archivo: estado.archivo, guardado: new Date().toISOString(), matriz: estado.matriz }); } catch (e) {}
+                }
+                procesar();
+            } catch (e) { msg('No se pudo leer el archivo: ' + ((e && e.message) || e)); }
+        };
+    };
+
+    const procesar = () => {
+        const r = _filasDesdeMatriz(estado.matriz || []);
+        if (r.error) { vistaCarga(); host.querySelector('#pmMsg').innerHTML = '<div class="warn">' + escH(r.error) + '</div>'; return; }
+        if (!r.filas.length) { vistaCarga(); host.querySelector('#pmMsg').innerHTML = '<div class="warn">El archivo no tiene filas de datos.</div>'; return; }
+        estado.filas = _analizar(r.filas);
+        vistaPrevia();
+    };
+
+    const vistaPrevia = async () => {
+        const filas = estado.filas;
+        const autorizados = await (__X.usuariosConPermiso ? __X.usuariosConPermiso(PERMISO) : []);
+        const actual = __X.getUsuarioActual ? __X.getUsuarioActual() : null;
+        const cuenta = k => filas.filter(f => f.estado === k).length;
+        const aplicables = filas.filter(f => f.marcar).length;
+        host.innerHTML = `
+        <div class="modal open"><div class="modal-panel modal-panel-xl">
+            <div class="modal-header"><h3>💵 Pago masivo · vista previa</h3><button class="modal-close" id="pmX">✕</button></div>
+            <div class="modal-body">
+                <div class="page-subtitle">Archivo: <b>${escH(estado.archivo)}</b> · ${filas.length} fila(s) · ✅ ${cuenta('ok')} cancelan · 🟡 ${cuenta('parcial')} parciales · ⚠️/❌ ${filas.length - cuenta('ok') - cuenta('parcial')} para revisar</div>
+                <div class="table-wrap" style="max-height:340px;overflow:auto;margin-top:8px;"><table>
+                    <thead><tr><th></th><th>Fecha</th><th>Descripción</th><th>Factura</th><th style="text-align:right;">Abono</th><th>Cliente / documento</th><th style="text-align:right;">Saldo</th><th>Resultado</th></tr></thead>
+                    <tbody>${filas.map((f, i) => {
+                        const et = ETIQUETA[f.estado] || ['', '#64748b'];
+                        const puede = !!f.doc && f.estado !== 'invalido' && f.estado !== 'noencontrada' && f.estado !== 'ambigua';
+                        return `<tr>
+                            <td><input type="checkbox" class="pmSel" data-i="${i}" ${f.marcar ? 'checked' : ''} ${puede ? '' : 'disabled'}></td>
+                            <td style="white-space:nowrap;">${escH(f.fecha)}</td>
+                            <td style="font-size:11px;">${escH(f.desc)}</td>
+                            <td><b>${escH(f.facturaTxt)}</b></td>
+                            <td style="text-align:right;">${formatCLP(f.monto)}</td>
+                            <td style="font-size:11px;">${f.doc ? escH((f.doc.razon || '') + ' · ' + (f.doc.rut || '')) : '—'}</td>
+                            <td style="text-align:right;">${f.doc ? formatCLP(f.doc.saldo || 0) : '—'}</td>
+                            <td style="font-size:11px;color:${et[1]};">${et[0]} ${escH(f.texto)}${!f.incluir ? ' · Revisar = No' : ''}</td></tr>`;
+                    }).join('')}</tbody>
+                </table></div>
+                <div class="section" style="margin-top:12px;background:#f6eef7;padding:10px;border-radius:8px;">
+                    <h2 style="margin-top:0;">🔐 Autorización</h2>
+                    <div class="page-subtitle">Solo usuarios con permiso de registrar pagos en Finanzas pueden aplicar el proceso. El pago quedará en la bitácora a nombre del usuario autorizado.</div>
+                    <div class="filter-bar">
+                        <div class="filter-field" style="min-width:220px;"><label>Usuario</label>
+                            <select id="pmUsuario">${autorizados.map(u => `<option value="${escAttr(u.username)}" ${actual && actual.username === u.username ? 'selected' : ''}>${escH(u.nombre)} (${escH(u.username)})</option>`).join('') || '<option value="">Sin usuarios autorizados</option>'}</select></div>
+                        <div class="filter-field" style="min-width:200px;"><label>Contraseña</label><input type="password" id="pmClave" autocomplete="off"></div>
+                    </div>
+                </div>
+                <div id="pmMsg" style="margin-top:8px;"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-outline btn-sm" id="pmAtras">← Volver</button>
+                <button class="btn-outline btn-sm" id="pmCancel">Cancelar</button>
+                <button class="btn-success btn-sm" id="pmAplicar">💾 Aplicar <span id="pmN">${aplicables}</span> pago(s)</button>
+            </div>
+        </div></div>`;
+        const q = s => host.querySelector(s);
+        const refrescarN = () => { q('#pmN').textContent = host.querySelectorAll('.pmSel:checked').length; };
+        host.querySelectorAll('.pmSel').forEach(c => c.addEventListener('change', () => {
+            filas[+c.dataset.i].marcar = c.checked;
+            const f = filas[+c.dataset.i];
+            if (c.checked && (f.estado === 'sobrepago' || f.estado === 'pagada' || f.estado === 'duplicado' || f.estado === 'rutdif')) {
+                if (!confirm('Esta fila está marcada como «' + f.texto + '». ¿Aplicarla de todos modos?')) { c.checked = false; f.marcar = false; }
+            }
+            refrescarN();
+        }));
+        q('#pmX').onclick = cerrar;
+        q('#pmCancel').onclick = cerrar;
+        q('#pmAtras').onclick = vistaCarga;
+        q('#pmAplicar').onclick = async () => {
+            const msg = (t, tipo) => { q('#pmMsg').innerHTML = '<div class="' + (tipo || 'warn') + '">' + escH(t) + '</div>'; };
+            const seleccion = filas.filter(f => f.marcar);
+            if (!seleccion.length) { msg('No hay filas marcadas para aplicar.'); return; }
+            if (fallos >= 5) { msg('Demasiados intentos fallidos. Cierre esta ventana y vuelva a intentarlo.'); return; }
+            const usuario = q('#pmUsuario').value;
+            const clave = q('#pmClave').value;
+            if (!usuario || !clave) { msg('Seleccione el usuario e ingrese su contraseña.'); return; }
+            const btn = q('#pmAplicar');
+            btn.disabled = true;
+            const v = await __X.verificarCredenciales(usuario, clave, PERMISO);
+            if (!v.ok) { fallos++; msg(v.error); btn.disabled = false; q('#pmClave').value = ''; return; }
+            await ejecutar(seleccion, v.usuario);
+        };
+    };
+
+    const ejecutar = async (seleccion, autorizador) => {
+        const sesion = __X.getUsuarioActual ? __X.getUsuarioActual() : null;
+        const nombreU = autorizador.nombre;
+        const extra = sesion && sesion.id !== autorizador.id ? ' (sesión de ' + sesion.nombre + ')' : '';
+        const lote = 'LOTE-' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
+        await CC.cargar();
+        const resultados = [];
+        const tocados = [];
+        seleccion.forEach(f => {
+            const d = (CC.docs ? CC.docs() : []).find(x => x.id === f.doc.id);
+            if (!d) { resultados.push({ f, ok: false, texto: 'El documento ya no existe' }); return; }
+            const ref = f.desc.slice(0, 80);
+            const yaEsta = (d.movimientos || []).some(m => m.tipo === 'PAGO' && m.estado !== 'REVERSADO' && Math.round(m.monto) === f.monto && m.fecha === f.fecha && String(m.referencia || '') === ref);
+            if (yaEsta && f.estado !== 'duplicado') { resultados.push({ f, ok: false, texto: 'Omitido: ya estaba registrado' }); return; }
+            const ahora = new Date().toISOString();
+            d.movimientos = d.movimientos || [];
+            d.movimientos.push({
+                id: 'pago-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8), documentoId: d.id, rut: d.rut, tipo: 'PAGO', subtipo: 'Transferencia',
+                monto: f.monto, fecha: f.fecha, usuario: nombreU, referencia: ref, documentoOrigenId: null, documentoDestinoId: d.id,
+                observacion: 'Pago masivo ' + lote + ' · archivo ' + estado.archivo, estado: 'REGISTRADO', creadoEn: ahora, actualizadoEn: ahora
+            });
+            d.pagos = (d.pagos || 0) + f.monto;
+            (d.bitacora = d.bitacora || []).push({ fecha: f.fecha, texto: 'Pago masivo: ' + formatCLP(f.monto) + ' (Transferencia · ' + ref + ') aplicado por ' + nombreU + extra + ' · ' + lote + ' · archivo ' + estado.archivo });
+            (__X.recalcularSaldoDocumento || __X.recalcularDocCC)(d);
+            tocados.push(d);
+            resultados.push({ f, ok: true, texto: 'Aplicado · saldo ahora ' + formatCLP(d.saldo || 0) });
+        });
+        CC.guardar();
+        let sinSync = 0;
+        for (const d of tocados) {
+            if (!__X.fusionarCamposCC) break;
+            const r = await __X.fusionarCamposCC(d, d, nombreU).catch(e => ({ ok: false, error: e && e.message }));
+            if (!r || r.offline || r.ok === false) sinSync++;
+        }
+        if (onChange) onChange();
+        const aplicados = resultados.filter(r => r.ok).length;
+        host.innerHTML = `
+        <div class="modal open"><div class="modal-panel modal-panel-xl">
+            <div class="modal-header"><h3>💵 Pago masivo · resultado</h3><button class="modal-close" id="pmX">✕</button></div>
+            <div class="modal-body">
+                <div class="${aplicados ? 'info' : 'warn'}"><b>${aplicados}</b> de ${resultados.length} pago(s) aplicados por <b>${escH(nombreU)}</b> · ${escH(lote)}${sinSync ? ` · ⚠ ${sinSync} pendiente(s) de sincronizar con la nube (se reintentará al sincronizar)` : ' · sincronizado'}.</div>
+                <div class="table-wrap" style="max-height:340px;overflow:auto;margin-top:8px;"><table>
+                    <thead><tr><th>Factura</th><th style="text-align:right;">Abono</th><th>Resultado</th></tr></thead>
+                    <tbody>${resultados.map(r => `<tr><td><b>${escH(r.f.facturaTxt)}</b></td><td style="text-align:right;">${formatCLP(r.f.monto)}</td><td style="color:${r.ok ? '#1b7a3d' : '#b3261e'};">${r.ok ? '✅' : '❌'} ${escH(r.texto)}</td></tr>`).join('')}</tbody>
+                </table></div>
+                <div class="page-subtitle" style="margin-top:8px;">Cada pago quedó en la bitácora de su factura y en el historial de movimientos.</div>
+            </div>
+            <div class="modal-footer"><button class="btn-success btn-sm" id="pmOk">Cerrar</button></div>
+        </div></div>`;
+        host.querySelector('#pmX').onclick = cerrar;
+        host.querySelector('#pmOk').onclick = cerrar;
+    };
+
+    vistaCarga();
+}
+
+__X.abrirPagoMasivoCC = abrirPagoMasivoCC;
 })();
 window.__FIN=(window.__FIN||[]);window.__FIN.push("09a_finanzas");</script>
 
