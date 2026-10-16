@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Gestor RD Musico · v20261015-0222</title>
+<title>Gestor RD Musico · v20261016-0210</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -573,6 +573,33 @@ window.addEventListener('unhandledrejection', function (ev) {
     } catch (e) {}
     return null;
   };
+  function idb(modo, fn) {
+    return new Promise(function (res) {
+      try {
+        var r = indexedDB.open('rdm_conn', 1);
+        r.onupgradeneeded = function () { r.result.createObjectStore('c'); };
+        r.onsuccess = function () {
+          try { fn(r.result.transaction('c', modo).objectStore('c'), res); } catch (e) { res(null); }
+        };
+        r.onerror = function () { res(null); };
+      } catch (e) { res(null); }
+    });
+  }
+  function guardarEspejo(u, k) {
+    return idb('readwrite', function (s, res) { s.put({ u: u, k: k }, 'c'); res(true); });
+  }
+  function leerEspejo() {
+    return idb('readonly', function (s, res) {
+      var g = s.get('c');
+      g.onsuccess = function () { res(g.result || null); };
+      g.onerror = function () { res(null); };
+    });
+  }
+  function guardarConexion(u, k) {
+    ALMACEN('rdm_rpc_url', u);
+    ALMACEN('rdm_rpc_key', k);
+    guardarEspejo(u, k);
+  }
   function leerEnlace(texto) {
     try {
       var m = /[#&]?acceso=([A-Za-z0-9_-]+)/.exec(String(texto || ''));
@@ -581,8 +608,7 @@ window.addEventListener('unhandledrejection', function (ev) {
       while (b.length % 4) b += '=';
       var c = JSON.parse(atob(b));
       if (c && c.u && c.k && String(c.u).indexOf('https://script.google.com/') === 0) {
-        ALMACEN('rdm_rpc_url', c.u);
-        ALMACEN('rdm_rpc_key', c.k);
+        guardarConexion(c.u, c.k);
         return true;
       }
     } catch (e) {}
@@ -593,15 +619,23 @@ window.addEventListener('unhandledrejection', function (ev) {
       try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
     }
   })();
+  try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) {}
+  var LISTO = (function () {
+    var u = ALMACEN('rdm_rpc_url'), k = ALMACEN('rdm_rpc_key');
+    if (u && k) { guardarEspejo(u, k); return Promise.resolve(); }
+    return Promise.race([leerEspejo(), new Promise(function (r) { setTimeout(function () { r(null); }, 1500); })]).then(function (e) {
+      if (e && e.u && e.k) { ALMACEN('rdm_rpc_url', e.u); ALMACEN('rdm_rpc_key', e.k); }
+    });
+  })();
   function urlServidor() { return window.__RDM_RPC_URL || ALMACEN('rdm_rpc_url') || ''; }
   function claveServidor() { return ALMACEN('rdm_rpc_key') || ''; }
   function pegarEnlace() {
     var t = (window.prompt('Pegue aquí el enlace de acceso que le envió el administrador') || '').trim();
     if (!t) return;
-    if (leerEnlace(t)) { location.reload(); return; }
+    if (leerEnlace(t)) { setTimeout(function () { location.reload(); }, 200); return; }
     if (t.indexOf('https://script.google.com/') === 0) {
       var k = (window.prompt('Clave de acceso al servidor') || '').trim();
-      if (k) { ALMACEN('rdm_rpc_url', t); ALMACEN('rdm_rpc_key', k); location.reload(); }
+      if (k) { guardarConexion(t, k); setTimeout(function () { location.reload(); }, 200); }
       return;
     }
     window.alert('El enlace no es válido. Pida uno nuevo al administrador.');
@@ -619,7 +653,12 @@ window.addEventListener('unhandledrejection', function (ev) {
       b.textContent = 'Pegar enlace de acceso';
       b.style.cssText = 'background:#fff;color:#b3261e;border:0;border-radius:6px;padding:6px 10px;font-weight:700;cursor:pointer';
       b.onclick = function () { pegarEnlace(); };
+      var r = document.createElement('button');
+      r.textContent = 'Reintentar';
+      r.style.cssText = 'background:transparent;color:#fff;border:1px solid #fff;border-radius:6px;padding:6px 10px;font-weight:700;cursor:pointer';
+      r.onclick = function () { sinAviso(); ejecutar('apiPing', []).then(function () {}, function () {}); };
       d.appendChild(t);
+      d.appendChild(r);
       d.appendChild(b);
       (document.body || document.documentElement).appendChild(d);
     }
@@ -633,35 +672,76 @@ window.addEventListener('unhandledrejection', function (ev) {
     aviso(texto);
     return { message: texto, conexion: true };
   }
-  function ejecutar(nombre, args, intentos) {
-    intentos = intentos || 0;
+
+  var MAX_SIMULTANEAS = 6;
+  var cola = [];
+  var activas = 0;
+  var enVuelo = {};
+
+  function avanzar() {
+    while (activas < MAX_SIMULTANEAS && cola.length) {
+      (function (x) {
+        activas++;
+        x.tarea().then(x.ok, x.fallo).then(function () { activas--; avanzar(); });
+      })(cola.shift());
+    }
+  }
+  function encolar(tarea) {
+    return new Promise(function (ok, fallo) { cola.push({ tarea: tarea, ok: ok, fallo: fallo }); avanzar(); });
+  }
+  function esLectura(fn) { return /^api(Obtener|Leer|Listar|Ping|Buscar|Estado|Prueba|Diagnostico)/.test(fn); }
+  function reintentable(fn) { return esLectura(fn) || /^api(Guardar|Fusionar|Cambiar|Empujar)/.test(fn); }
+  function clonar(v) { try { return v === undefined ? v : JSON.parse(JSON.stringify(v)); } catch (e) { return v; } }
+  function esperar(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+  function intentar(nombre, args, n) {
     var u = urlServidor();
-    if (!u) return Promise.reject(errorConexion('Este equipo aún no está conectado. Abra el enlace de acceso que le envió el administrador o péguelo con el botón.'));
     var k = claveServidor();
-    if (!k) return Promise.reject(errorConexion('Este equipo aún no está conectado. Abra el enlace de acceso que le envió el administrador o péguelo con el botón.'));
+    if (!u || !k) return Promise.reject(errorConexion('Este equipo aún no está conectado. Abra el enlace de acceso que le envió el administrador o péguelo con el botón.'));
+    var ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var corte = ctl ? setTimeout(function () { ctl.abort(); }, 90000) : null;
+    var transitorio = function (msg) {
+      if (corte) clearTimeout(corte);
+      if (reintentable(nombre) && n < 2) return esperar(900 * (n + 1)).then(function () { return intentar(nombre, args, n + 1); });
+      return Promise.reject(errorConexion(msg));
+    };
     return fetch(u, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({ rpc: 1, fn: nombre, args: args, key: k, hoja: '__rpc_no_actualizado__' }),
       redirect: 'follow',
-      credentials: 'omit'
-    }).then(function (r) { return r.text(); }, function () {
-      throw errorConexion('No se pudo contactar al servidor. Revise la URL /exec, su conexión a internet y que la implementación tenga acceso "Cualquier persona".');
-    }).then(function (t) {
+      credentials: 'omit',
+      signal: ctl ? ctl.signal : undefined
+    }).then(function (r) { return r.text(); }, function () { return null; }).then(function (t) {
+      if (corte) clearTimeout(corte);
+      if (t === null) return transitorio('No se pudo contactar al servidor. Revise su conexión a internet; se reintentará automáticamente.');
       var j;
-      try { j = JSON.parse(t); } catch (e) { throw errorConexion('La URL no responde como servidor del ERP. Revise que sea la URL /exec y que el acceso sea "Cualquier persona".'); }
-      if (j && j.ok === false && j.codigo === 'clave' && intentos < 2) {
-        var actual = ALMACEN('rdm_rpc_key');
-        if (!actual || actual === k) ALMACEN('rdm_rpc_key', null);
-        return ejecutar(nombre, args, intentos + 1);
+      try { j = JSON.parse(t); } catch (e) { return transitorio('El servidor no respondió correctamente (puede estar saturado). Pulse Reintentar en unos segundos.'); }
+      if (j && j.ok === false && j.codigo === 'clave') {
+        if (n < 1) return esperar(1200).then(function () { return intentar(nombre, args, n + 1); });
+        return Promise.reject(errorConexion('El servidor rechazó el acceso de este equipo (el enlace pudo ser revocado o reemplazado). Pida un enlace nuevo al administrador y péguelo con el botón.'));
       }
-      if (j && j.ok === false && (j.codigo === 'clave' || j.codigo === 'bloqueo' || j.codigo === 'config')) throw errorConexion(j.error);
-      if (j && j.ok === false && /API Key/.test(String(j.error || ''))) throw errorConexion('El servidor no está actualizado. En Apps Script: Implementar, Administrar implementaciones, editar, Versión nueva.');
-      if (j && j.ok === true && !('valor' in j)) throw errorConexion('El servidor no está actualizado. En Apps Script: Implementar, Administrar implementaciones, editar, Versión nueva.');
-      if (!j || j.ok !== true) throw { message: (j && j.error) || 'Error del servidor' };
+      if (j && j.ok === false && (j.codigo === 'bloqueo' || j.codigo === 'config')) return Promise.reject(errorConexion(j.error));
+      if (j && j.ok === false && /API Key/.test(String(j.error || ''))) return Promise.reject(errorConexion('El servidor no está actualizado. En Apps Script: Implementar, Administrar implementaciones, editar, Versión nueva.'));
+      if (j && j.ok === true && !('valor' in j)) return Promise.reject(errorConexion('El servidor no está actualizado. En Apps Script: Implementar, Administrar implementaciones, editar, Versión nueva.'));
+      if (!j || j.ok !== true) return Promise.reject({ message: (j && j.error) || 'Error del servidor' });
       sinAviso();
       return j.valor;
     });
+  }
+
+  function ejecutar(nombre, args) {
+    var lectura = esLectura(nombre);
+    var id = nombre + '|' + JSON.stringify(args);
+    if (lectura && enVuelo[id]) return enVuelo[id].then(clonar);
+    var p = LISTO.then(function () { return encolar(function () { return intentar(nombre, args, 0); }); });
+    if (lectura) {
+      enVuelo[id] = p;
+      var fin = function () { delete enVuelo[id]; };
+      p.then(fin, fin);
+      return p.then(clonar);
+    }
+    return p;
   }
   function crear(ok, fallo, contexto) {
     return new Proxy({}, {
@@ -672,7 +752,7 @@ window.addEventListener('unhandledrejection', function (ev) {
         if (typeof nombre !== 'string' || nombre === 'then') return undefined;
         return function () {
           var a = Array.prototype.slice.call(arguments);
-          ejecutar(nombre, a, false).then(
+          ejecutar(nombre, a).then(
             function (v) { if (ok) ok(v, contexto); },
             function (e) { if (fallo) fallo(e, contexto); else console.error(e); }
           );
@@ -683,7 +763,7 @@ window.addEventListener('unhandledrejection', function (ev) {
   if (!(window.google && window.google.script && window.google.script.run)) {
     window.google = { script: { run: crear(null, null, undefined), host: { close: function () {}, setHeight: function () {}, setWidth: function () {} } } };
   }
-  setTimeout(function () { ejecutar('apiPing', [], 0).then(function () {}, function () {}); }, 0);
+  setTimeout(function () { ejecutar('apiPing', []).then(function () {}, function () {}); }, 0);
 })();
 </script>
     <script>window.__INICIO=(window.__INICIO||[]);window.__INICIO.push("01_base");
@@ -1800,8 +1880,8 @@ window.__FIN=(window.__FIN||[]);window.__FIN.push("01_base");</script>
 
 const { store } = __X;
 
-const TIMEOUT_MS = 15000;
-const TIMEOUT_MS_LECTURA_MASIVA = 45000;
+const TIMEOUT_MS = 30000;
+const TIMEOUT_MS_LECTURA_MASIVA = 90000;
 
 function servidorDisponible() {
     try {
