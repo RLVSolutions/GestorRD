@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Gestor RD Musico · v20261016-0210</title>
+<title>Gestor RD Musico · v20261016-0431</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -517,6 +517,18 @@ tr:hover { background: #f6eef7; }
 .bell-nuevo { color: #6b2a72; font-size: 10px; text-transform: uppercase; margin-left: 4px; }
 .bell-msg { font-size: 12.5px; line-height: 1.35; margin-bottom: 6px; }
 .bell-vacio { padding: 22px 14px; font-size: 13px; color: #6b7280; text-align: center; }
+#rdmAct { position: fixed; right: 14px; bottom: 56px; z-index: 99990; display: flex; flex-direction: column; gap: 8px; max-width: min(420px, calc(100vw - 28px)); pointer-events: none; }
+#rdmAct .act-item { pointer-events: auto; display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-radius: 10px; background: #fff; color: #1f2430; border: 1px solid #d5d9e2; border-left: 5px solid #6b2a72; box-shadow: 0 6px 22px rgba(20,20,40,.22); font-size: 13px; line-height: 1.35; }
+#rdmAct .act-item.ok { border-left-color: #1b7a3d; }
+#rdmAct .act-item.warn { border-left-color: #b8740b; }
+#rdmAct .act-item.err { border-left-color: #b3261e; }
+#rdmAct .act-ic { flex: 0 0 18px; width: 18px; height: 18px; text-align: center; font-weight: 700; }
+#rdmAct .act-item.run .act-ic { border: 2px solid #d5d9e2; border-top-color: #6b2a72; border-radius: 50%; animation: rdmGiro .9s linear infinite; }
+#rdmAct .act-item.ok .act-ic { color: #1b7a3d; }
+#rdmAct .act-item.warn .act-ic { color: #b8740b; }
+#rdmAct .act-item.err .act-ic { color: #b3261e; }
+#rdmAct .act-tx { flex: 1; word-break: break-word; }
+#rdmAct .act-x { flex: 0 0 auto; border: 0; background: transparent; color: #6b7280; font-size: 18px; line-height: 1; cursor: pointer; padding: 0 2px; margin: 0; }
 </style>
 
 </head>
@@ -1075,6 +1087,128 @@ function _avisoRender(nombre, caja, err) {
         </div>`;
 }
 __X.escH = escH; __X.escAttr = escAttr; __X.toast = toast; __X.protegerRender = protegerRender;
+const actividad = (function () {
+    let panel = null;
+    function host() {
+        if (panel && document.body.contains(panel)) return panel;
+        panel = document.getElementById('rdmAct');
+        if (!panel) { panel = document.createElement('div'); panel.id = 'rdmAct'; panel.setAttribute('role', 'status'); panel.setAttribute('aria-live', 'polite'); document.body.appendChild(panel); }
+        return panel;
+    }
+    function iniciar(texto) {
+        const el = document.createElement('div');
+        el.className = 'act-item run';
+        el.innerHTML = '<span class="act-ic"></span><span class="act-tx"></span><button type="button" class="act-x" title="Cerrar">×</button>';
+        el.querySelector('.act-tx').textContent = texto || '';
+        el.querySelector('.act-x').addEventListener('click', function () { cerrar(); });
+        host().appendChild(el);
+        let timer = null, vivo = true;
+        function cerrar() { vivo = false; clearTimeout(timer); if (el.parentNode) el.parentNode.removeChild(el); }
+        function fijar(clase, ic, txt, ms) {
+            if (!vivo) return;
+            el.className = 'act-item ' + clase;
+            el.querySelector('.act-ic').textContent = ic;
+            if (txt != null) el.querySelector('.act-tx').textContent = txt;
+            clearTimeout(timer);
+            if (ms) timer = setTimeout(cerrar, ms);
+        }
+        return {
+            texto: function (t) { if (vivo) el.querySelector('.act-tx').textContent = t; },
+            ok: function (t, ms) { fijar('ok', '✓', t, ms || 4500); },
+            aviso: function (t, ms) { fijar('warn', '!', t, ms || 9000); },
+            error: function (t, ms) { fijar('err', '✕', t, ms || 14000); },
+            cerrar: cerrar,
+            vivo: function () { return vivo; }
+        };
+    }
+    return { iniciar: iniciar };
+})();
+
+const _lecturas = { total: 0, hechos: 0, fallos: [], nombres: [], h: null, pendientes: 0 };
+const _eventosProceso = { errores: [], ultimaActividad: 0, llamadas: 0 };
+
+function _kb(n) { return n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB'; }
+
+function _cerrarLectura() {
+    const L = _lecturas;
+    if (!L.h) return;
+    const h = L.h; L.h = null;
+    const n = L.total, f = L.fallos.slice();
+    const nombre = L.nombres.length === 1 ? '«' + L.nombres[0] + '»' : n + ' archivos';
+    L.total = 0; L.hechos = 0; L.fallos = []; L.nombres = [];
+    if (f.length && f.length === n) { h.error('No se pudo leer ' + nombre + ': ' + f[0]); return; }
+    if (f.length) { h.aviso((n - f.length) + ' de ' + n + ' archivos leídos. Falló: ' + f.join(' · ')); return; }
+    h.texto('Archivo leído: ' + nombre + '. Procesando…');
+    const t0 = Date.now();
+    _eventosProceso.errores = [];
+    const vigilar = setInterval(function () {
+        if (!h.vivo()) { clearInterval(vigilar); return; }
+        const quieto = _eventosProceso.llamadas === 0 && Date.now() - Math.max(t0, _eventosProceso.ultimaActividad) > 1800;
+        if (_eventosProceso.errores.length) { clearInterval(vigilar); h.error('Error al procesar ' + nombre + ': ' + _eventosProceso.errores[0]); return; }
+        if (quieto) { clearInterval(vigilar); h.ok('Proceso terminado: ' + nombre + '. Revisa el resultado en pantalla.'); return; }
+        if (Date.now() - t0 > 180000) { clearInterval(vigilar); h.aviso('El proceso de ' + nombre + ' sigue sin terminar tras 3 minutos. Verifica el resultado antes de repetirlo.'); }
+    }, 400);
+}
+
+(function parcharLectores() {
+    if (typeof FileReader === 'undefined' || FileReader.prototype.__rdmAct) return;
+    ['readAsArrayBuffer', 'readAsText', 'readAsDataURL', 'readAsBinaryString'].forEach(function (m) {
+        const orig = FileReader.prototype[m];
+        if (typeof orig !== 'function') return;
+        FileReader.prototype[m] = function (blob) {
+            const L = _lecturas;
+            const nombre = (blob && blob.name) || 'archivo';
+            if (!L.h) { L.h = actividad.iniciar(''); L.total = 0; L.hechos = 0; L.fallos = []; L.nombres = []; }
+            L.total++; L.pendientes++; L.nombres.push(nombre);
+            L.h.texto(L.total === 1 ? 'Leyendo «' + nombre + '»' + (blob && blob.size ? ' (' + _kb(blob.size) + ')' : '') + '…' : 'Leyendo archivos (' + L.hechos + '/' + L.total + ')…');
+            const fr = this;
+            let cerrado = false;
+            function fin(falla) {
+                if (cerrado) return; cerrado = true;
+                L.hechos++; L.pendientes--;
+                if (falla) L.fallos.push('«' + nombre + '»: ' + falla);
+                if (L.total > 1 && L.h) L.h.texto('Leyendo archivos (' + L.hechos + '/' + L.total + ')…');
+                if (L.pendientes <= 0) setTimeout(function () { if (L.pendientes <= 0) _cerrarLectura(); }, 60);
+            }
+            fr.addEventListener('load', function () { fin(''); });
+            fr.addEventListener('error', function () { fin((fr.error && fr.error.message) || 'no se pudo leer'); });
+            fr.addEventListener('abort', function () { fin('lectura cancelada'); });
+            try { return orig.apply(this, arguments); }
+            catch (e) { fin(e.message || String(e)); throw e; }
+        };
+    });
+    FileReader.prototype.__rdmAct = true;
+})();
+
+(function erroresGlobales() {
+    let ultimo = '', ultimoT = 0;
+    function mostrar(msg) {
+        msg = String(msg || '').trim();
+        if (!msg) return;
+        _eventosProceso.errores.push(msg);
+        const ahora = Date.now();
+        if (msg === ultimo && ahora - ultimoT < 5000) return;
+        ultimo = msg; ultimoT = ahora;
+        actividad.iniciar('').error('Falló un proceso: ' + msg.slice(0, 240));
+    }
+    window.addEventListener('unhandledrejection', function (ev) {
+        const r = ev.reason;
+        const msg = r && r.message ? r.message : (typeof r === 'string' ? r : '');
+        if (/ResizeObserver|AbortError|Script error/i.test(msg)) return;
+        mostrar(msg);
+    });
+    window.addEventListener('error', function (ev) {
+        if (!ev || !ev.message || /ResizeObserver|Script error/i.test(ev.message)) return;
+        mostrar(ev.message);
+    });
+})();
+
+function marcarLlamada(delta) {
+    _eventosProceso.llamadas = Math.max(0, _eventosProceso.llamadas + delta);
+    _eventosProceso.ultimaActividad = Date.now();
+}
+function registrarErrorProceso(msg) { _eventosProceso.errores.push(String(msg || '')); }
+__X.actividad = actividad; __X.marcarLlamada = marcarLlamada; __X.registrarErrorProceso = registrarErrorProceso;
 })();
 
 (function(){
@@ -2039,16 +2173,52 @@ function llamarLento(funcion, ...args) {
     return _seguirLlamada(funcion, _llamarConTimeout(funcion, TIMEOUT_MS_LECTURA_MASIVA, args));
 }
 
+const _NOMBRES_PROCESO = {
+    apiFusionarRegistroSensible: 'Guardando registros en la nube', apiGuardarColeccion: 'Guardando datos en la nube',
+    apiEmpujarCatalogoSatelite: 'Enviando catálogo al satélite', apiGuardarCatalogo: 'Guardando catálogo en la nube'
+};
+function _nombreProceso(f) { return _NOMBRES_PROCESO[f] || (_ESCRITURAS.test(f) ? 'Guardando en la nube' : 'Consultando la nube'); }
+let _lentas = 0, _lentaH = null, _falloH = null, _falloN = 0, _falloT = 0;
+function _falloLlamada(que, motivo) {
+    const ahora = Date.now();
+    if (!_falloH || !_falloH.vivo() || ahora - _falloT > 8000) { _falloN = 0; _falloH = __X.actividad.iniciar(''); }
+    _falloN++; _falloT = ahora;
+    _falloH.error(que + ' falló' + (_falloN > 1 ? ' (' + _falloN + ' veces)' : '') + ': ' + motivo);
+}
 function _llamarConTimeout(funcion, timeoutMs, args) {
     return new Promise((resolve, reject) => {
         if (!servidorDisponible()) { reject(new Error('Servidor no disponible')); return; }
         let resuelto = false;
-        const inicio = Date.now();
+        const silenciosa = funcion === 'apiPing' || funcion === 'apiAgregarBitacora';
+        if (__X.marcarLlamada) __X.marcarLlamada(1);
+        let lenta = false;
+        const avisoLento = silenciosa ? null : setTimeout(() => {
+            if (resuelto) return;
+            lenta = true; _lentas++;
+            if (!_lentaH || !_lentaH.vivo()) _lentaH = __X.actividad.iniciar('');
+            _lentaH.texto(_nombreProceso(funcion) + '… (' + _lentas + ' en curso)');
+        }, 2500);
+        const terminar = (falla) => {
+            resuelto = true; clearTimeout(temporizador); clearTimeout(avisoLento);
+            if (__X.marcarLlamada) __X.marcarLlamada(-1);
+            if (lenta) {
+                _lentas = Math.max(0, _lentas - 1);
+                if (_lentaH && _lentaH.vivo()) {
+                    if (_lentas > 0) _lentaH.texto(_nombreProceso(funcion) + '… (' + _lentas + ' en curso)');
+                    else _lentaH.cerrar();
+                }
+            }
+            if (falla && !silenciosa && (_ESCRITURAS.test(funcion) || lenta)) {
+                if (__X.registrarErrorProceso) __X.registrarErrorProceso(falla.message);
+                _falloLlamada(_nombreProceso(funcion), falla.message);
+            }
+        };
         const temporizador = setTimeout(() => {
             if (!resuelto) {
-                resuelto = true;
-                console.warn('llamar(' + funcion + '): tiempo de espera agotado tras ' + timeoutMs + ' ms — la llamada sigue en el servidor, pero el cliente dejo de esperar.');
-                reject(new Error('El servidor no respondió a tiempo (' + Math.round(timeoutMs / 1000) + 's) al llamar "' + funcion + '"'));
+                const err = new Error('El servidor no respondió a tiempo (' + Math.round(timeoutMs / 1000) + 's) al llamar "' + funcion + '"');
+                console.warn('llamar(' + funcion + '): tiempo de espera agotado');
+                terminar(err);
+                reject(err);
             }
         }, timeoutMs);
 
@@ -2056,16 +2226,17 @@ function _llamarConTimeout(funcion, timeoutMs, args) {
             google.script.run
                 .withSuccessHandler(r => {
                     if (resuelto) return;
-                    resuelto = true; clearTimeout(temporizador);
+                    terminar(null);
                     resolve(r);
                 })
                 .withFailureHandler(err => {
                     if (resuelto) return;
-                    resuelto = true; clearTimeout(temporizador);
-                    reject(new Error(err && err.message ? err.message : String(err)));
+                    const e = new Error(err && err.message ? err.message : String(err));
+                    terminar(e);
+                    reject(e);
                 })[funcion](...args);
         } catch (e) {
-            resuelto = true; clearTimeout(temporizador);
+            if (!resuelto) terminar(e);
             reject(e);
         }
     });
@@ -2187,23 +2358,48 @@ const BLOBS_RESTO_CLIENTE = {
     cobranzaState: 'Cobranza (estado de gestion vigente)'
 };
 
-async function subirTodoNuevo(onEstado) {
+async function _conLimite(promesa, ms, etiqueta) {
+    let t;
+    const limite = new Promise((_, rej) => { t = setTimeout(() => rej(new Error('Tiempo agotado (' + Math.round(ms / 1000) + 's) en ' + etiqueta)), ms); });
+    try { return await Promise.race([promesa, limite]); } finally { clearTimeout(t); }
+}
+
+async function _enParalelo(items, concurrencia, fn, onAvance) {
+    let i = 0, hechos = 0;
+    const trabajadores = Array.from({ length: Math.min(concurrencia, items.length) }, async () => {
+        while (i < items.length) {
+            const k = i++;
+            await fn(items[k], k);
+            hechos++;
+            if (onAvance) onAvance(hechos, items.length);
+        }
+    });
+    await Promise.all(trabajadores);
+}
+
+async function subirTodoNuevo(onEstado, onProgreso) {
     let ok = 0, err = 0, registros = 0;
+    const etapasTotal = Object.keys(COLECCIONES_RESTO).length + 2 + 1 + Object.keys(BLOBS_RESTO_CLIENTE).length;
+    let etapa = 0;
+    const prog = function (txt) { if (onProgreso) onProgreso(Math.min(etapa, etapasTotal), etapasTotal, txt); };
     const aviso = function (et, r, cantidad, detalle) {
         if (r) ok++; else err++;
+        etapa++;
         registros += Number(cantidad) || 0;
         if (onEstado) onEstado(et, r ? 'ok' : 'error', Number(cantidad)||0, detalle || '');
     };
+    const LIM = 150000;
     for (const clave of Object.keys(COLECCIONES_RESTO)) {
+        prog(_etiquetaSync(clave));
         try {
             const def = COLECCIONES_RESTO[clave];
             let local = await store.lista(def.claveLocal);
             if (def.idCampo || !(local || []).length) {
-                await sincronizarColeccionResto(clave);
+                await _conLimite(sincronizarColeccionResto(clave), LIM, _etiquetaSync(clave));
                 local = await store.lista(def.claveLocal);
             }
             if (!(local || []).length) { aviso(_etiquetaSync(clave), true, 0, 'sin datos locales'); continue; }
-            const r = await subirColeccionResto(clave);
+            const r = await _conLimite(subirColeccionResto(clave), LIM, _etiquetaSync(clave));
             if (!r || r.ok !== true) throw new Error((r && r.error) || 'No se pudo respaldar');
             aviso(_etiquetaSync(clave), true, (local||[]).length, 'enviados');
         } catch (e) { aviso(_etiquetaSync(clave), false, 0, e.message); }
@@ -2211,27 +2407,41 @@ async function subirTodoNuevo(onEstado) {
     const u = __X.getUsuarioActual ? __X.getUsuarioActual() : null;
     const usuario = u ? u.nombre : '';
     for (const modulo of ['cuentasCorrientes', 'postventa_casos']) {
+        const def = MODULOS_SENSIBLES_CLIENTE[modulo];
+        prog(def.etiqueta);
         try {
-            const def = MODULOS_SENSIBLES_CLIENTE[modulo];
             const regs = await store.lista(def.claveLocal);
-            for (const r of regs) { await llamar('apiFusionarRegistroSensible', modulo, r.id, r, r.actualizado, usuario); }
+            let fallos = 0, primero = '';
+            await _enParalelo(regs, 4, async (r) => {
+                try { await llamar('apiFusionarRegistroSensible', modulo, r.id, r, r.actualizado, usuario); }
+                catch (e) { fallos++; if (!primero) primero = e.message; }
+            }, (h, n) => prog(def.etiqueta + ' ' + h + '/' + n));
+            if (fallos) throw new Error(fallos + ' de ' + regs.length + ' registros no se enviaron: ' + primero);
             aviso(def.etiqueta, true, regs.length, 'enviados');
-        } catch (e) { aviso(MODULOS_SENSIBLES_CLIENTE[modulo].etiqueta, false, 0, e.message); }
+        } catch (e) { aviso(def.etiqueta, false, 0, e.message); }
     }
+    prog('Logística · Packing');
     try {
-        const ordenes = await store.lista('packingOrdenes'); let n = 0;
+        const ordenes = await store.lista('packingOrdenes');
+        const tareas = [];
         for (const ot of ordenes) {
-            await llamar('apiFusionarRegistroSensible', 'packOrdenes', ot.id,
-                { orden: ot.orden, fecha: ot.fecha, responsable: ot.responsable, movil: ot.movil, observaciones: ot.observaciones, contadorBulto: ot.contadorBulto }, ot.actualizado, usuario); n++;
-            for (const b of (ot.bultos || [])) { await llamar('apiFusionarRegistroSensible', 'packBultos', b.id, Object.assign({ otId: ot.id }, b), b.actualizado, usuario); n++; }
-            for (const m of (ot.mandantes || [])) { await llamar('apiFusionarRegistroSensible', 'packMandantes', m.id, Object.assign({ otId: ot.id }, m), m.actualizado, usuario); n++; }
+            tareas.push(['packOrdenes', ot.id, { orden: ot.orden, fecha: ot.fecha, responsable: ot.responsable, movil: ot.movil, observaciones: ot.observaciones, contadorBulto: ot.contadorBulto }, ot.actualizado]);
+            for (const b of (ot.bultos || [])) tareas.push(['packBultos', b.id, Object.assign({ otId: ot.id }, b), b.actualizado]);
+            for (const m of (ot.mandantes || [])) tareas.push(['packMandantes', m.id, Object.assign({ otId: ot.id }, m), m.actualizado]);
         }
-        aviso('Logística · Packing', true, n, 'enviados');
+        let fallos = 0, primero = '';
+        await _enParalelo(tareas, 4, async (t) => {
+            try { await llamar('apiFusionarRegistroSensible', t[0], t[1], t[2], t[3], usuario); }
+            catch (e) { fallos++; if (!primero) primero = e.message; }
+        }, (h, n) => prog('Logística · Packing ' + h + '/' + n));
+        if (fallos) throw new Error(fallos + ' de ' + tareas.length + ' registros no se enviaron: ' + primero);
+        aviso('Logística · Packing', true, tareas.length, 'enviados');
     } catch (e) { aviso('Logística · Packing', false, 0, e.message); }
     for (const clave of Object.keys(BLOBS_RESTO_CLIENTE)) {
+        prog(BLOBS_RESTO_CLIENTE[clave]);
         try {
             const blob = await store.get(clave, null); let n=0;
-            if (blob) { const r = await subirBlobResto(clave, blob); if (!r || r.ok !== true) throw new Error((r && r.error) || 'No se pudo respaldar'); n=1; }
+            if (blob) { const r = await _conLimite(subirBlobResto(clave, blob), LIM, BLOBS_RESTO_CLIENTE[clave]); if (!r || r.ok !== true) throw new Error((r && r.error) || 'No se pudo respaldar'); n=1; }
             aviso(BLOBS_RESTO_CLIENTE[clave], true, n, 'enviados');
         } catch (e) { aviso(BLOBS_RESTO_CLIENTE[clave], false, 0, e.message); }
     }
@@ -2413,7 +2623,9 @@ async function verificarConexion() {
 
 let _sincronizando = false;
 
-async function sincronizarAhora(onEstado) {
+let _progresoSync = null;
+
+async function sincronizarAhora(onEstado, onProgreso) {
     if (_sincronizando) return { ok: false, ocupado: true };
     if (!servidorDisponible()) return { ok: false, motivo: 'sin_servidor', errores: 1, detalle: ['Sin conexión con el servidor'] };
     _sincronizando = true;
@@ -2425,13 +2637,19 @@ async function sincronizarAhora(onEstado) {
         r = await subirTodoNuevo(function (et, tipo, cantidad, detalle) {
             if (tipo !== 'ok') fallos.push(et + ': ' + (detalle || 'error'));
             if (onEstado) onEstado(et, tipo, cantidad, detalle);
+        }, function (n, total, txt) {
+            _progresoSync = { n, total, txt };
+            _repintarEstado();
+            if (onProgreso) onProgreso(n, total, txt);
         });
     } catch (e) {
         fallos.push(e.message || String(e));
         r.err++;
+    } finally {
+        _enVuelo = Math.max(0, _enVuelo - 1);
+        _sincronizando = false;
+        _progresoSync = null;
     }
-    _enVuelo--;
-    _sincronizando = false;
     if (r.err) {
         _errorEscritura = fallos[0] || 'Error al sincronizar';
         _conexion = 'ok';
@@ -2441,8 +2659,11 @@ async function sincronizarAhora(onEstado) {
         _ultimoOk = Date.now();
     }
     _recalcularEstado();
+    _repintarEstado();
     return { ok: r.err === 0, modulos: r.ok, errores: r.err, registros: r.registros, detalle: fallos };
 }
+
+function _repintarEstado() { _suscriptoresEstado.forEach(cb => { try { cb(_estadoGlobal); } catch (e) {} }); }
 
 const _PILDORA = {
     inactivo: { clase: '', texto: '☁ Local', titulo: 'Sin conexión con la nube: los datos quedan solo en este navegador' },
@@ -2472,6 +2693,7 @@ function montarSyncGlobal(host) {
         const d = detalleSync();
         pil.className = 'sy' + (p.clase ? ' ' + p.clase : '');
         pil.textContent = (estado === 'error' && d.conexion === 'caida' && !_errorEscritura) ? '☁ Sin conexión' : p.texto;
+        if (estado === 'sincronizando' && _progresoSync) { pil.textContent = '☁ ' + _progresoSync.n + '/' + _progresoSync.total; pil.title = 'Sincronizando: ' + _progresoSync.txt; return; }
         let t = p.titulo;
         if (estado === 'error' && d.error) t += ': ' + d.error;
         if (estado === 'ok' && d.ultimoOk) t += ' · última actividad ' + _hora(d.ultimoOk);
@@ -2492,12 +2714,19 @@ function montarSyncGlobal(host) {
         if (btn.classList.contains('run')) return;
         if (!servidorDisponible()) { __X.toast('Modo local: no hay conexión con la nube desde este navegador', 'warn'); return; }
         btn.className = 'syncnow run';
-        const r = await sincronizarAhora();
+        const h = __X.actividad.iniciar('Sincronizando con la nube…');
+        let r;
+        try {
+            r = await sincronizarAhora(null, function (n, total, txt) { if (h.vivo()) h.texto('Sincronizando (' + n + '/' + total + '): ' + txt); });
+        } catch (e) {
+            r = { ok: false, errores: 1, detalle: [(e && e.message) || String(e)] };
+        }
+        if (r.ocupado) { h.aviso('Ya hay una sincronización en curso'); btn.className = 'syncnow'; return; }
         btn.className = 'syncnow ' + (r.ok ? 'ok' : 'err');
-        if (r.ocupado) { btn.className = 'syncnow run'; return; }
-        if (r.ok) __X.toast('Sincronizado con la nube (' + r.registros + ' registro(s) revisados)', 'success');
-        else __X.toast('Sincronización con errores: ' + (r.detalle && r.detalle[0] ? r.detalle[0] : 'revisa la conexión'), 'error', 7000);
+        if (r.ok) h.ok('Sincronizado con la nube: ' + r.registros + ' registro(s) revisados en ' + r.modulos + ' módulo(s).');
+        else h.error('Sincronización con ' + r.errores + ' error(es): ' + (r.detalle && r.detalle.length ? r.detalle.join(' · ') : 'revisa la conexión'));
         setTimeout(function () { btn.className = 'syncnow'; }, 2200);
+        try { await verificarConexion(); } catch (e) {}
         if (__X.refrescarCampana) __X.refrescarCampana();
     });
 
@@ -2508,7 +2737,7 @@ function montarSyncGlobal(host) {
 }
 __X.sincronizarAhora = sincronizarAhora; __X.detalleSync = detalleSync; __X.verificarConexion = verificarConexion;
 __X.montarSyncGlobal = montarSyncGlobal;
-__X.estadoGlobal = estadoGlobal; __X.onEstadoGlobalCambia = onEstadoGlobalCambia; __X._fijarEstadoGlobal = _fijarEstadoGlobal;
+__X.estadoGlobal = estadoGlobal; __X.onEstadoGlobalCambia = onEstadoGlobalCambia; __X._fijarEstadoGlobal = _fijarEstadoGlobal; __X._recalcularEstado = _recalcularEstado;
 __X.auditarFuentesCuentasCorrientes = auditarFuentesCuentasCorrientes;
 __X.auditarSincronizacion = auditarSincronizacion;
 __X.CATEGORIAS_DIAGNOSTICO = CATEGORIAS_DIAGNOSTICO;
@@ -4042,9 +4271,11 @@ store.onCambio((clave, valor) => {
     const espera = esMasivo ? ESPERA_MASIVA_MS : ESPERA_INACTIVIDAD_MS;
     _timers[def.hoja] = setTimeout(() => {
         _fijarEstadoGlobal('sincronizando');
-        subirModulo(def.hoja, (texto, tipo) => {
-            if (tipo === 'default') return;
-            _fijarEstadoGlobal(tipo === 'error' ? 'error' : 'ok');
+        let huboError = false;
+        Promise.resolve(subirModulo(def.hoja, (texto, tipo) => {
+            if (tipo === 'error') huboError = true;
+        })).catch(() => { huboError = true; }).then(() => {
+            if (huboError) _fijarEstadoGlobal('error'); else __X._recalcularEstado();
         });
     }, espera);
 });
@@ -8877,6 +9108,7 @@ async function importarComunas_Excel(file) {
                 resolve({ ok: false, error: err.message || 'No se pudo leer el archivo' });
             }
         };
+        reader.onerror = () => resolve({ ok: false, error: 'No se pudo leer el archivo' });
         reader.readAsArrayBuffer(file);
     });
 }
@@ -16496,8 +16728,9 @@ async function importarTasasCMF_archivo(file) {
                 else if (n) toast('Guardado localmente, pero no se pudo subir a la nube: ' + ((subida && subida.error) || 'error desconocido'), 'warn');
                 else toast('No se reconocieron columnas (year, month, cmf1a)', 'warn');
                 resolve({ cantidad: n, subida });
-            } catch (err) { toast('Error al leer el archivo', 'error'); resolve(0); }
+            } catch (err) { toast('Error al leer el archivo', 'error'); resolve({ cantidad: 0, error: (err && err.message) || 'No se pudo leer el archivo' }); }
         };
+        r.onerror = () => resolve({ cantidad: 0, error: 'No se pudo leer el archivo' });
         r.readAsArrayBuffer(file);
     });
 }
@@ -19068,20 +19301,21 @@ function _numCC(x) {
 }
 
 async function _importarExcel(){
-    if(typeof XLSX === 'undefined'){ toast('La librería de Excel no cargó', 'error'); return; }
+    if(typeof XLSX === 'undefined'){ toast('La librería de Excel no cargó', 'error'); throw new Error('La librería de Excel no cargó (¿sin conexión?)'); }
+    let _fin; const _prom = new Promise(r => { _fin = r; });
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.xlsx,.xls,.xlsm';
     input.onchange = e => {
         const file = e.target.files[0];
-        if(!file) return;
+        if(!file){ _fin(null); return; }
         const reader = new FileReader();
         reader.onload = async ev => {
             try {
                 await CC.cargar();
                 const wb = XLSX.read(new Uint8Array(ev.target.result), { type: 'array', cellDates: false });
                 const ws = wb.Sheets['CTA CTE'] || wb.Sheets['CTACTE'] || wb.Sheets[wb.SheetNames[0]];
-                if(!ws){ toast('No se encontró la hoja CTA CTE', 'error'); return; }
+                if(!ws){ toast('No se encontró la hoja CTA CTE', 'error'); _fin({ error: 'No se encontró la hoja CTA CTE' }); return; }
                 const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' });
 
                 let hr = -1;
@@ -19089,7 +19323,7 @@ async function _importarExcel(){
                     const fila = (rows[i] || []).map(x => String(x || '').trim().toUpperCase());
                     if(fila.some(c => ['NUMERO','N°','NUM','FACTURA'].includes(c))){ hr = i; break; }
                 }
-                if(hr < 0){ toast('No se encontró la fila de cabecera', 'error'); return; }
+                if(hr < 0){ toast('No se encontró la fila de cabecera (debe incluir una columna NUMERO/FACTURA)', 'error'); _fin({ error: 'No se encontró la fila de cabecera (debe incluir una columna NUMERO/FACTURA)' }); return; }
                 const cab = (rows[hr] || []).map(x => String(x || '').trim().toUpperCase());
                 const col = (...alias) => {
                     for(const a of alias){
@@ -19220,7 +19454,7 @@ async function _importarExcel(){
                 CC.guardar();
                 if (__X.fusionarCamposCC) {
                     const u = getUsuarioActual();
-                    Promise.all(_tocados.map(d => __X.fusionarCamposCC(d, d, u ? u.nombre : ''))).catch(function(){});
+                    _subirTocadosCC(_tocados, u);
                 }
 
                 const detalle = [];
@@ -19232,13 +19466,18 @@ async function _importarExcel(){
                 toast(nuevos + ' nuevo(s), ' + actualizados + ' actualizado(s), ' + sinCambio + ' sin cambios', 'success', 6000);
                 if(detalle.length) toast('Aviso: ' + detalle.join(' · '), 'warn', 7000);
                 if (_box) _tabla();
+                _fin({ cantidad: nuevos + actualizados, nuevos, actualizados, sinCambio, detalle });
             } catch(err){
                 toast('Error al leer el archivo: ' + (err && err.message ? err.message : err), 'error');
+                _fin({ error: 'Error al leer el archivo: ' + (err && err.message ? err.message : err) });
             }
         };
+        reader.onerror = () => { _fin({ error: 'No se pudo leer el archivo' }); };
         reader.readAsArrayBuffer(file);
     };
+    input.addEventListener('cancel', () => _fin(null));
     input.click();
+    return _prom;
 }
 
 function _pegar(){
@@ -19316,15 +19555,27 @@ function _pegar(){
         }
     });
 
-    if(!n){ toast('No se pudo procesar (revise formato)', 'error'); return; }
+    if(!n){ toast('No se pudo procesar (revise formato)', 'error'); return { error: 'No se pudo procesar: revise el formato de las filas pegadas' }; }
     CC.guardar();
     if (__X.fusionarCamposCC) {
         const u2 = getUsuarioActual();
-        Promise.all(_tocados.map(d => __X.fusionarCamposCC(d, d, u2 ? u2.nombre : ''))).catch(function(){});
+        _subirTocadosCC(_tocados, u2);
     }
     if (_box) _tabla();
     toast(`${nuevosP} nuevo(s), ${actualizadosP} actualizado(s)${err ? `, ${err} con error` : ''}`, 'success');
     if (saldoNoCoincideP) toast(`Aviso: ${saldoNoCoincideP} con saldo distinto al pegado en la columna [saldo] (revisar pagos/N-C)`, 'warn', 7000);
+    return { cantidad: nuevosP + actualizadosP, nuevos: nuevosP, actualizados: actualizadosP, conError: err };
+}
+
+function _subirTocadosCC(docs, u){
+    if(!docs.length) return;
+    const h = __X.actividad.iniciar('Enviando ' + docs.length + ' documento(s) de Cuentas Corrientes a la nube…');
+    Promise.all(docs.map(d => Promise.resolve(__X.fusionarCamposCC(d, d, u ? u.nombre : '')).then(() => null, e => (e && e.message) || 'error')))
+        .then(res => {
+            const fallos = res.filter(Boolean);
+            if(!fallos.length) h.ok(docs.length + ' documento(s) sincronizados con la nube.');
+            else h.error(fallos.length + ' de ' + docs.length + ' documento(s) quedaron solo en este equipo: ' + fallos[0]);
+        });
 }
 
 function _exportar(){
@@ -25329,6 +25580,7 @@ function _abrirImportarExcel() {
                 if (prog) prog.textContent = '';
             }
         };
+        r.onerror = () => resolve({ ok: false, error: 'No se pudo leer el archivo' });
         r.readAsArrayBuffer(file);
     });
 }
@@ -25379,6 +25631,7 @@ async function importarRMACompras_Excel(file) {
                 resolve({ ok: subida.ok, cantidad: leidas.length, nuevas, actualizadas, error: subida.ok ? null : subida.error });
             } catch (err) { resolve({ ok: false, error: err.message || 'No se pudo leer el archivo' }); }
         };
+        r.onerror = () => resolve({ ok: false, error: 'No se pudo leer el archivo' });
         r.readAsArrayBuffer(file);
     });
 }
@@ -25418,6 +25671,7 @@ async function importarRMANC_Excel(file) {
                 resolve({ ok: subida.ok, cantidad: leidas.length, nuevas, actualizadas, error: subida.ok ? null : subida.error });
             } catch (err) { resolve({ ok: false, error: err.message || 'No se pudo leer el archivo' }); }
         };
+        r.onerror = () => resolve({ ok: false, error: 'No se pudo leer el archivo' });
         r.readAsArrayBuffer(file);
     });
 }
@@ -25462,6 +25716,7 @@ async function importarRMAStock_Excel(file) {
                 resolve({ ok: subida.ok, cantidad: leidas.length, nuevas, actualizadas, error: subida.ok ? null : subida.error });
             } catch (err) { resolve({ ok: false, error: err.message || 'No se pudo leer el archivo' }); }
         };
+        r.onerror = () => resolve({ ok: false, error: 'No se pudo leer el archivo' });
         r.readAsArrayBuffer(file);
     });
 }
@@ -25805,7 +26060,7 @@ function _importar(evento, box) {
 
             const prods = leidos;
             res.innerHTML = '<div class="info">⏳ Subiendo ' + prods.length + ' producto(s) a la nube…</div>';
-            reemplazarCatalogo(prods).then(function(r) {
+            reemplazarCatalogo(prods).catch(function(err){ return { ok: false, error: (err && err.message) || String(err) }; }).then(function(r) {
                 if (r && r.ok) {
                     toast(`${prods.length} productos importados`, 'success');
                     res.innerHTML = `<div class="card card-green"><b>✅ Proceso con éxito.</b><br>${prods.length} producto(s) importados y sincronizados con la nube.</div>`;
@@ -25818,8 +26073,9 @@ function _importar(evento, box) {
                 box.querySelector('#inTotal').textContent = total();
                 _stats(box);
             });
-        } catch (err) { res.innerHTML = '<div class="warn">No se pudo leer el archivo. ¿Es un Excel válido?</div>'; }
+        } catch (err) { res.innerHTML = '<div class="warn">No se pudo leer el archivo. ¿Es un Excel válido?<br><small>' + escH((err && err.message) || '') + '</small></div>'; }
     };
+    reader.onerror = () => { res.innerHTML = '<div class="warn">No se pudo leer el archivo: ' + escH((reader.error && reader.error.message) || 'error de lectura') + '</div>'; };
     reader.readAsArrayBuffer(file);
 }
 
@@ -26637,15 +26893,32 @@ function _renderImportaciones(box) {
 
     const btn = id => box.querySelector(id);
     box.querySelector('#inFile')?.addEventListener('change', (e) => __X.importarCatalogo_desdeEvento(e, box));
-    btn('#impCCExcel')?.addEventListener('click', async () => { const z=box.querySelector('#impEstadoGlobal'); if(z) z.innerHTML='<div class="info">⏳ Cuentas Corrientes: selecciona el archivo; al cargarlo se informará el resultado y los errores.</div>'; if (__X.importarCC_Excel) { try { const r=await __X.importarCC_Excel(z); if(r && z) z.innerHTML='<div class="card card-green">✅ Archivo cargado. '+(r.cantidad ?? r.importados ?? 0)+' registro(s) importados.</div>'; } catch(e){ if(z) z.innerHTML='<div class="warn">❌ Error: '+escH(e.message||String(e))+'</div>'; } } });
-    btn('#impCCPegar')?.addEventListener('click', async () => { const z=box.querySelector('#impEstadoGlobal'); if(z) z.innerHTML='<div class="info">⏳ Procesando filas pegadas…</div>'; if (__X.importarCC_Pegar) { try { const r=await __X.importarCC_Pegar(z); if(r && z) z.innerHTML='<div class="card card-green">✅ Importación terminada. '+(r.cantidad ?? r.importados ?? 0)+' registro(s) procesados.</div>'; } catch(e){ if(z) z.innerHTML='<div class="warn">❌ Error: '+escH(e.message||String(e))+'</div>'; } } });
+    const _resCC = (z, r, cancelaTxt) => {
+        if (!z) return;
+        if (!r) { z.innerHTML = '<div class="info">' + cancelaTxt + '</div>'; return; }
+        if (r.error) { z.innerHTML = '<div class="warn">❌ ' + escH(r.error) + '</div>'; return; }
+        z.innerHTML = '<div class="card card-green">✅ Importación terminada: ' + (r.nuevos ?? 0) + ' nuevo(s), ' + (r.actualizados ?? 0) + ' actualizado(s)' + (r.sinCambio != null ? ', ' + r.sinCambio + ' sin cambios' : '') + (r.conError ? ', ' + r.conError + ' fila(s) con error' : '') + '.' + (r.detalle && r.detalle.length ? '<br><small>' + escH(r.detalle.join(' · ')) + '</small>' : '') + '</div>';
+    };
+    btn('#impCCExcel')?.addEventListener('click', async () => {
+        const z = box.querySelector('#impEstadoGlobal');
+        if (!__X.importarCC_Excel) return;
+        if (z) z.innerHTML = '<div class="info">⏳ Cuentas Corrientes: selecciona el archivo; al cargarlo se informará el resultado y los errores.</div>';
+        try { _resCC(z, await __X.importarCC_Excel(), 'Importación cancelada: no se eligió archivo.'); }
+        catch (e) { if (z) z.innerHTML = '<div class="warn">❌ Error: ' + escH(e.message || String(e)) + '</div>'; }
+    });
+    btn('#impCCPegar')?.addEventListener('click', async () => {
+        const z = box.querySelector('#impEstadoGlobal');
+        if (!__X.importarCC_Pegar) return;
+        try { _resCC(z, await __X.importarCC_Pegar(z), 'No se pegaron filas.'); }
+        catch (e) { if (z) z.innerHTML = '<div class="warn">❌ Error: ' + escH(e.message || String(e)) + '</div>'; }
+    });
     const _bindRMA = (inputId, fnNombre, etiqueta) => {
         btn(inputId)?.addEventListener('change', e => {
             const f = e.target.files && e.target.files[0];
             const res = box.querySelector('#impRMAResultado');
             if (!f || !__X[fnNombre]) return;
             if (res) res.innerHTML = '<div class="info">⏳ Importando ' + etiqueta + '…</div>';
-            __X[fnNombre](f).then(function(r) {
+            Promise.resolve().then(function(){ return __X[fnNombre](f); }).catch(function(err){ return { ok: false, error: (err && err.message) || String(err) }; }).then(function(r) {
                 if (!res) return;
                 if (r && r.ok) {
                     res.innerHTML = '<div class="card card-green"><b>✅ ' + etiqueta + ': proceso con éxito.</b><br>' +
@@ -26665,7 +26938,7 @@ function _renderImportaciones(box) {
         const res = box.querySelector('#impComunasResultado');
         if (!f || !__X.importarComunas_Excel) return;
         if (res) res.innerHTML = '<div class="info">⏳ Importando y subiendo a la nube…</div>';
-        __X.importarComunas_Excel(f).then(function(r) {
+        Promise.resolve().then(function(){ return __X.importarComunas_Excel(f); }).catch(function(err){ return { ok: false, error: (err && err.message) || String(err) }; }).then(function(r) {
             if (!res) return;
             if (r && r.ok) {
                 res.innerHTML = '<div class="card card-green"><b>✅ Proceso con éxito.</b><br>' +
@@ -26681,7 +26954,7 @@ function _renderImportaciones(box) {
         const res = box.querySelector('#impTasasResultado');
         if (!f || !__X.importarTasasCMF_archivo) return;
         if (res) res.innerHTML = '<div class="info">⏳ Importando y subiendo a la nube…</div>';
-        __X.importarTasasCMF_archivo(f).then(function(r) {
+        Promise.resolve().then(function(){ return __X.importarTasasCMF_archivo(f); }).catch(function(err){ return { subida: { ok: false, error: (err && err.message) || String(err) }, cantidad: 1 }; }).then(function(r) {
             if (!res) return;
             const n = r && r.cantidad;
             const subida = r && r.subida;
@@ -26689,6 +26962,8 @@ function _renderImportaciones(box) {
                 res.innerHTML = '<div class="card card-green"><b>✅ Proceso con éxito.</b><br>' + n + ' tasa(s) importadas y sincronizadas con la nube.</div>';
             } else if (n) {
                 res.innerHTML = '<div class="warn"><b>⚠️ Guardado localmente, pero no se pudo subir a la nube.</b><br>Error: ' + escH((subida && subida.error) || 'desconocido') + '</div>';
+            } else if (r && r.error) {
+                res.innerHTML = '<div class="warn"><b>❌ No se pudo importar.</b><br>' + escH(r.error) + '</div>';
             } else {
                 res.innerHTML = '<div class="warn">No se reconocieron las columnas del archivo (se esperan año, mes y tasa CMF).</div>';
             }
