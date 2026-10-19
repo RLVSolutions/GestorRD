@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Gestor RD Musico · v20261016-0431</title>
+<title>Gestor RD Musico · v20261019-1455</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -26169,17 +26169,59 @@ function _sitioSugerido() {
     return '';
 }
 
+function _urlExecActual() {
+    try { return window.__RDM_RPC_URL || window.localStorage.getItem('rdm_rpc_url') || ''; } catch (e) { return ''; }
+}
+
+function _claveMaestraGuardada() {
+    try { return window.sessionStorage.getItem('rdm_clave_maestra') || ''; } catch (e) { return ''; }
+}
+
+async function _llamarMaestra(fn, args, clave) {
+    const url = _urlExecActual();
+    if (!url) return await llamar(fn, ...args);
+    if (!clave) throw new Error('Ingresa la clave maestra de administrador (este equipo no tiene una clave de administrador guardada).');
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 60000);
+    let resp;
+    try {
+        resp = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ rpc: 1, fn, args, key: clave }), signal: ctl.signal });
+    } catch (e) {
+        throw new Error(e && e.name === 'AbortError' ? 'El servidor no respondió a tiempo.' : 'No se pudo contactar al servidor: ' + ((e && e.message) || e));
+    } finally { clearTimeout(t); }
+    let datos;
+    try { datos = await resp.json(); } catch (e) { throw new Error('Respuesta inválida del servidor (¿URL /exec o implementación incorrecta?).'); }
+    if (!datos || datos.ok !== true) {
+        const msg = (datos && datos.error) || 'Error desconocido';
+        if (datos && (datos.codigo === 'clave' || datos.codigo === 'maestra')) throw new Error('Esta clave no tiene permiso de administrador. Ingresa la clave maestra (RPC_CLAVE) o usa un enlace de administrador.');
+        if (/Funci[oó]n inexistente|no permitida/i.test(msg)) throw new Error('El servidor aún no tiene la versión nueva de Rpc.gs: reemplázala y publica "Versión nueva" en la misma implementación.');
+        throw new Error(msg);
+    }
+    return datos.valor;
+}
+
 function _seccionAccesosColaboradores() {
     if (!tienePermiso(getRolActual(), 'admin:configurar_cloud')) return '';
+    const usaClave = !!_urlExecActual();
     return `
         <div class="section">
             <h2>🔗 Accesos de colaboradores</h2>
-            <div class="info">Genera un enlace personal para cada colaborador. Al abrirlo por primera vez, el ERP se conecta solo, sin pedir la URL del servidor ni la clave. Puedes revocar a una persona sin afectar a las demás. Solo funciona con la clave maestra de administrador en este equipo.</div>
+            <div class="info">Genera un enlace personal para cada colaborador. Al abrirlo por primera vez, el ERP se conecta solo, sin pedir la URL del servidor ni la clave. Puedes revocar a una persona sin afectar a las demás.${usaClave ? ' Si abres el ERP directamente desde el script no se pide clave. Desde GitHub se usa la clave maestra (RPC_CLAVE) o un enlace de administrador.' : ''}</div>
+            ${usaClave ? `<div class="filter-bar">
+                <div class="filter-field" style="flex:1;min-width:260px;"><label>Clave maestra de administrador (opcional si este equipo ya es administrador)</label>
+                    <input id="accClave" type="password" autocomplete="off" value="${escAttrLocal(_claveMaestraGuardada())}" placeholder="RPC_CLAVE"></div>
+                <div class="filter-field" style="justify-content:flex-end;"><label style="visibility:hidden">.</label>
+                    <label style="display:flex;gap:6px;align-items:center;"><input type="checkbox" id="accVerClave"> Mostrar</label></div>
+                <div class="filter-field" style="justify-content:flex-end;"><label style="visibility:hidden">.</label>
+                    <button class="btn-outline btn-sm" id="accCargar">Cargar accesos</button></div>
+            </div>` : ''}
             <div class="filter-bar">
                 <div class="filter-field" style="min-width:200px;"><label>Nombre del colaborador</label>
                     <input id="accNombre" placeholder="Ej: Juan Pérez"></div>
                 <div class="filter-field" style="flex:1;min-width:260px;"><label>URL del sitio (donde está publicado el ERP)</label>
                     <input id="accSitio" value="${escAttrLocal(_sitioSugerido())}" placeholder="https://usuario.github.io/repositorio/"></div>
+                <div class="filter-field" style="justify-content:flex-end;"><label style="visibility:hidden">.</label>
+                    <label style="display:flex;gap:6px;align-items:center;white-space:nowrap;"><input type="checkbox" id="accAdmin"> Administrador</label></div>
                 <div class="filter-field" style="justify-content:flex-end;"><label style="visibility:hidden">.</label>
                     <button class="btn-success btn-sm" id="accGenerar">🔗 Generar enlace</button></div>
             </div>
@@ -26193,19 +26235,43 @@ function _wireAccesosColaboradores(box) {
     if (!btn) return;
     const res = box.querySelector('#accResultado');
     const lista = box.querySelector('#accLista');
+    const inClave = box.querySelector('#accClave');
+    const claveDispositivo = () => { try { return window.localStorage.getItem('rdm_rpc_key') || ''; } catch (e) { return ''; } };
+    const clave = () => (inClave && inClave.value.trim()) || claveDispositivo();
+    const recordar = () => { try { if (inClave && inClave.value.trim()) window.sessionStorage.setItem('rdm_clave_maestra', inClave.value.trim()); } catch (e) {} };
+
+    if (inClave) box.querySelector('#accVerClave').addEventListener('change', e => { inClave.type = e.target.checked ? 'text' : 'password'; });
+
+    async function copiar(valor) {
+        try { await navigator.clipboard.writeText(valor); }
+        catch (e) { const t = document.createElement('textarea'); t.value = valor; document.body.appendChild(t); t.select(); document.execCommand('copy'); t.remove(); }
+        toast('Enlace copiado', 'success');
+    }
 
     async function pintarLista() {
         if (!servidorDisponible()) { lista.innerHTML = '<div class="page-subtitle">Sin conexión con la nube.</div>'; return; }
+        if (_urlExecActual() && !clave()) { lista.innerHTML = '<div class="page-subtitle">Ingresa la clave maestra y pulsa «Cargar accesos» para ver los enlaces generados.</div>'; return; }
+        const inSitio = box.querySelector('#accSitio');
+        if (inSitio && !inSitio.value.trim()) {
+            try { const g = await _llamarMaestra('apiObtenerSitioColaboradores', [], clave()); if (g) inSitio.value = g; } catch (e) {}
+        }
+        lista.innerHTML = '<div class="page-subtitle">⏳ Cargando accesos…</div>';
         try {
-            const datos = await llamar('apiListarAccesosColaboradores');
-            lista.innerHTML = (datos && datos.length)
-                ? `<table class="data-table"><thead><tr><th>Colaborador</th><th>Creado</th><th></th></tr></thead><tbody>${datos.map(a => `<tr><td><b>${escH(a.nombre)}</b></td><td>${escH(String(a.creado || '').slice(0, 10))}</td><td style="text-align:right;"><button class="btn-outline btn-sm" data-rev="${escAttrLocal(a.nombre)}">Revocar</button></td></tr>`).join('')}</tbody></table>`
-                : '<div class="page-subtitle">Aún no hay accesos individuales.</div>';
+            const datos = await _llamarMaestra('apiListarAccesosColaboradores', [], clave());
+            recordar();
+            if (!datos || !datos.length) { lista.innerHTML = '<div class="page-subtitle">Aún no hay accesos individuales.</div>'; return; }
+            lista.innerHTML = '<table class="data-table"><thead><tr><th>Colaborador</th><th>Creado</th><th>Enlace</th><th></th></tr></thead><tbody>' +
+                datos.map((a, i) => '<tr><td><b>' + escH(a.nombre) + '</b>' + (a.admin ? ' <span class="page-subtitle">(administrador)</span>' : '') + '</td><td>' + escH(String(a.creado || '').slice(0, 10)) + '</td><td style="min-width:260px;">' +
+                    (a.enlace ? '<input readonly style="width:100%;" data-enl="' + i + '" value="' + escAttrLocal(a.enlace) + '">' : '<span class="page-subtitle">Enlace anterior no recuperable: genera uno nuevo y revoca este.</span>') +
+                    '</td><td style="text-align:right;white-space:nowrap;">' + (a.enlace ? '<button class="btn-outline btn-sm" data-cop="' + i + '">📋 Copiar</button> ' : '') +
+                    '<button class="btn-outline btn-sm" data-rev="' + escAttrLocal(a.nombre) + '">Revocar</button></td></tr>').join('') + '</tbody></table>';
+            lista.querySelectorAll('[data-cop]').forEach(b => b.addEventListener('click', () => copiar(datos[Number(b.dataset.cop)].enlace)));
+            lista.querySelectorAll('[data-enl]').forEach(i => i.addEventListener('focus', () => i.select()));
             lista.querySelectorAll('[data-rev]').forEach(b => b.addEventListener('click', async () => {
                 if (!confirm('¿Revocar el acceso de ' + b.dataset.rev + '? Dejará de poder usar el ERP con su enlace.')) return;
                 b.disabled = true;
                 try {
-                    await llamar('apiRevocarAccesoColaborador', b.dataset.rev);
+                    await _llamarMaestra('apiRevocarAccesoColaborador', [b.dataset.rev], clave());
                     toast('Acceso revocado', 'success');
                 } catch (e) { toast('No se pudo revocar: ' + ((e && e.message) || e), 'error'); }
                 pintarLista();
@@ -26219,28 +26285,29 @@ function _wireAccesosColaboradores(box) {
         if (!servidorDisponible()) { toast('Sin conexión con la nube en este momento', 'warn'); return; }
         const nombre = box.querySelector('#accNombre').value.trim();
         const sitio = box.querySelector('#accSitio').value.trim();
+        if (_urlExecActual() && !clave()) { res.innerHTML = '<div class="warn">Ingresa la clave maestra de administrador.</div>'; return; }
         if (!nombre) { toast('Escribe el nombre del colaborador', 'warn'); return; }
-        if (!/^https:\/\//.test(sitio)) { toast('Escribe la URL completa del sitio (https://…)', 'warn'); return; }
-        let exec = '';
-        try { exec = window.__RDM_RPC_URL || window.localStorage.getItem('rdm_rpc_url') || ''; } catch (e) {}
+        if (sitio && !/^https:\/\//.test(sitio)) { toast('Escribe la URL completa del sitio (https://…)', 'warn'); return; }
         btn.disabled = true;
+        res.innerHTML = '<div class="info">⏳ Generando enlace…</div>';
         try {
             try { window.localStorage.setItem('rdm_sitio', sitio); } catch (e) {}
-            const r = await llamar('apiCrearAccesoColaborador', nombre, exec, sitio);
-            res.innerHTML = `<div class="info"><b>Enlace para ${escH(nombre)}</b> (envíaselo solo a esa persona):<br>
+            const r = await _llamarMaestra('apiCrearAccesoColaborador', [nombre, _urlExecActual(), sitio, !!(box.querySelector('#accAdmin') && box.querySelector('#accAdmin').checked)], clave());
+            recordar();
+            res.innerHTML = `<div class="card card-green"><b>✅ Enlace para ${escH(r.nombre || nombre)}</b> (envíaselo solo a esa persona):<br>
                 <input id="accEnlace" readonly style="width:100%;margin-top:6px;" value="${escAttrLocal(r.enlace)}">
                 <div class="toolbar" style="margin-top:6px;"><button class="btn-outline btn-sm" id="accCopiar">📋 Copiar enlace</button></div></div>`;
             const inp = res.querySelector('#accEnlace');
-            res.querySelector('#accCopiar').addEventListener('click', async () => {
-                try { await navigator.clipboard.writeText(inp.value); toast('Enlace copiado', 'success'); }
-                catch (e) { inp.select(); document.execCommand('copy'); toast('Enlace copiado', 'success'); }
-            });
+            inp.addEventListener('focus', () => inp.select());
+            res.querySelector('#accCopiar').addEventListener('click', () => copiar(inp.value));
             box.querySelector('#accNombre').value = '';
             pintarLista();
         } catch (e) {
-            res.innerHTML = '<div class="warn">' + escH((e && e.message) || String(e)) + '</div>';
+            res.innerHTML = '<div class="warn">❌ ' + escH((e && e.message) || String(e)) + '</div>';
         } finally { btn.disabled = false; }
     });
+    const bc = box.querySelector('#accCargar');
+    if (bc) bc.addEventListener('click', pintarLista);
     pintarLista();
 }
 
