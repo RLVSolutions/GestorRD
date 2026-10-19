@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Gestor RD Musico · v20261019-1455</title>
+<title>Gestor RD Musico · v20261019-1509</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -27592,6 +27592,8 @@ window.__FIN=(window.__FIN||[]);window.__FIN.push("restauracion integral");</scr
     if (fallo && fallo.causa === 'incompleto') return { estado: 'C', fallo: fallo };
     var errsDeEsteArchivo = errores.filter(function(e){ return e.archivo === archivo; });
     if (errsDeEsteArchivo.length) return { estado: 'E', errores: errsDeEsteArchivo };
+    var inicio = window.__INICIO || [];
+    if (inicio.indexOf(archivo) === -1) return { estado: 'S' };
     return { estado: 'D_o_desconocido' };
   }
 
@@ -27611,6 +27613,8 @@ window.__FIN=(window.__FIN||[]);window.__FIN.push("restauracion integral");</scr
         explicacion = 'El archivo <code>' + a + '.html</code> no existe en el proyecto de Apps Script. Créalo y pega su contenido completo.';
       } else if (info.estado === 'C') {
         explicacion = 'El archivo <code>' + a + '.html</code> está incompleto (no cierra su etiqueta). Vuelve a pegarlo completo — la última línea debe ser la de cierre de script/estilo.';
+      } else if (info.estado === 'S') {
+        explicacion = 'El archivo <code>' + a + '.html</code> nunca llegó a ejecutarse: su contenido tiene un error de sintaxis o está truncado/pegado incorrectamente en Apps Script. Vuelve a pegarlo completo (debe empezar con <code>&lt;script&gt;</code> y terminar con <code>&lt;/script&gt;</code>) y abre la consola (F12) para ver el error exacto.';
       } else if (info.estado === 'E') {
         var primerError = info.errores[0];
         explicacion = 'El archivo está presente y contiene la función esperada, pero su ejecución se interrumpió antes de registrarla. ' +
