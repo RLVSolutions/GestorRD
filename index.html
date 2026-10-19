@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Gestor RD Musico · v20261019-1509</title>
+<title>Gestor RD Musico · v20261019-1721</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -639,6 +639,7 @@ window.addEventListener('unhandledrejection', function (ev) {
       if (e && e.u && e.k) { ALMACEN('rdm_rpc_url', e.u); ALMACEN('rdm_rpc_key', e.k); }
     });
   })();
+  window.__rdmGuardarClave = function (k) { var u = ALMACEN('rdm_rpc_url'); if (!u || !k) return false; guardarConexion(u, k); return true; };
   function urlServidor() { return window.__RDM_RPC_URL || ALMACEN('rdm_rpc_url') || ''; }
   function claveServidor() { return ALMACEN('rdm_rpc_key') || ''; }
   function pegarEnlace() {
@@ -26213,6 +26214,8 @@ function _seccionAccesosColaboradores() {
                 <div class="filter-field" style="justify-content:flex-end;"><label style="visibility:hidden">.</label>
                     <label style="display:flex;gap:6px;align-items:center;"><input type="checkbox" id="accVerClave"> Mostrar</label></div>
                 <div class="filter-field" style="justify-content:flex-end;"><label style="visibility:hidden">.</label>
+                    <label style="display:flex;gap:6px;align-items:center;white-space:nowrap;"><input type="checkbox" id="accRecordar" checked> Recordar en este equipo</label></div>
+                <div class="filter-field" style="justify-content:flex-end;"><label style="visibility:hidden">.</label>
                     <button class="btn-outline btn-sm" id="accCargar">Cargar accesos</button></div>
             </div>` : ''}
             <div class="filter-bar">
@@ -26238,7 +26241,15 @@ function _wireAccesosColaboradores(box) {
     const inClave = box.querySelector('#accClave');
     const claveDispositivo = () => { try { return window.localStorage.getItem('rdm_rpc_key') || ''; } catch (e) { return ''; } };
     const clave = () => (inClave && inClave.value.trim()) || claveDispositivo();
-    const recordar = () => { try { if (inClave && inClave.value.trim()) window.sessionStorage.setItem('rdm_clave_maestra', inClave.value.trim()); } catch (e) {} };
+    const recordar = () => {
+        const k = inClave && inClave.value.trim();
+        if (!k) return;
+        try { window.sessionStorage.setItem('rdm_clave_maestra', k); } catch (e) {}
+        const rec = box.querySelector('#accRecordar');
+        if (rec && rec.checked) {
+            try { if (window.__rdmGuardarClave) window.__rdmGuardarClave(k); else window.localStorage.setItem('rdm_rpc_key', k); toast('Clave de administrador guardada en este equipo', 'success'); } catch (e) {}
+        }
+    };
 
     if (inClave) box.querySelector('#accVerClave').addEventListener('change', e => { inClave.type = e.target.checked ? 'text' : 'password'; });
 
@@ -26277,7 +26288,10 @@ function _wireAccesosColaboradores(box) {
                 pintarLista();
             }));
         } catch (e) {
-            lista.innerHTML = '<div class="warn">' + escH((e && e.message) || String(e)) + '</div>';
+            const m = (e && e.message) || String(e);
+            lista.innerHTML = /permiso de administrador/.test(m) && !(inClave && inClave.value.trim())
+                ? '<div class="page-subtitle">Este equipo no tiene clave de administrador. Escribe la clave maestra arriba y pulsa «Cargar accesos» o «Generar enlace».</div>'
+                : '<div class="warn">' + escH(m) + '</div>';
         }
     }
 
