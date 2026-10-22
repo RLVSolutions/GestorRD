@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Gestor RD Musico · v20261020-0134</title>
+<title>Gestor RD Musico · v20261022-0307</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -26179,7 +26179,22 @@ function _claveMaestraGuardada() {
 
 async function _llamarMaestra(fn, args, clave) {
     const url = _urlExecActual();
-    if (!url) return await llamar(fn, ...args);
+    if (!url) {
+        try { return await llamar(fn, ...args); }
+        catch (e) {
+            if (!/is not a function/i.test((e && e.message) || '')) throw e;
+            if (fn === 'apiObtenerEnlaceColaboradores') {
+                try {
+                    const r = await llamar('apiCrearAccesoColaborador', 'Colaboradores', args[1] || '', args[0] || '');
+                    return { enlace: r.enlace };
+                } catch (e2) {
+                    if (!/is not a function/i.test((e2 && e2.message) || '')) throw e2;
+                }
+            }
+            if (fn === 'apiObtenerSitioColaboradores') return '';
+            throw new Error('El servidor no tiene la versión nueva de Rpc.gs. En Apps Script reemplaza el archivo Rpc.gs, guarda y publica «Versión nueva» en la misma implementación.');
+        }
+    }
     if (!clave) throw new Error('Ingresa la clave maestra de administrador (este equipo no tiene una clave de administrador guardada).');
     const ctl = new AbortController();
     const t = setTimeout(() => ctl.abort(), 60000);
