@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Gestor RD Musico · v20261020-0134</title>
+<title>Gestor RD Musico · v20261019-1721</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -643,7 +643,7 @@ window.addEventListener('unhandledrejection', function (ev) {
   function urlServidor() { return window.__RDM_RPC_URL || ALMACEN('rdm_rpc_url') || ''; }
   function claveServidor() { return ALMACEN('rdm_rpc_key') || ''; }
   function pegarEnlace() {
-    var t = (window.prompt('Pegue el enlace de acceso del equipo. Si es el administrador, pegue la URL /exec del servidor y después se le pedirá la clave maestra.') || '').trim();
+    var t = (window.prompt('Pegue aquí el enlace de acceso que le envió el administrador') || '').trim();
     if (!t) return;
     if (leerEnlace(t)) { setTimeout(function () { location.reload(); }, 200); return; }
     if (t.indexOf('https://script.google.com/') === 0) {
@@ -25765,6 +25765,7 @@ __X.buscarUltimaCompraRMA = async function(codProd) {
 };
 })();
 window.__FIN=(window.__FIN||[]);window.__FIN.push("09f_rma_gestion");</script>
+cript>
 
 <script>window.__INICIO=(window.__INICIO||[]);window.__INICIO.push("09h_centro_operaciones");
 (function(){
@@ -26205,35 +26206,39 @@ function _seccionAccesosColaboradores() {
     const usaClave = !!_urlExecActual();
     return `
         <div class="section">
-            <h2>🔗 Enlace para colaboradores</h2>
-            <div class="info">Un solo enlace para todo el equipo. Quien lo abre queda conectado sin pedir la URL del servidor ni la clave. Si lo generas de nuevo, el anterior deja de funcionar.${usaClave ? ' Este equipo está conectado por GitHub: para ver o renovar el enlace se necesita la clave maestra (RPC_CLAVE).' : ' Abierto directamente desde el script no se pide clave.'}</div>
+            <h2>🔗 Accesos de colaboradores</h2>
+            <div class="info">Genera un enlace personal para cada colaborador. Al abrirlo por primera vez, el ERP se conecta solo, sin pedir la URL del servidor ni la clave. Puedes revocar a una persona sin afectar a las demás.${usaClave ? ' Si abres el ERP directamente desde el script no se pide clave. Desde GitHub se usa la clave maestra (RPC_CLAVE) o un enlace de administrador.' : ''}</div>
             ${usaClave ? `<div class="filter-bar">
-                <div class="filter-field" style="flex:1;min-width:260px;"><label>Clave maestra (RPC_CLAVE)</label>
+                <div class="filter-field" style="flex:1;min-width:260px;"><label>Clave maestra de administrador (opcional si este equipo ya es administrador)</label>
                     <input id="accClave" type="password" autocomplete="off" value="${escAttrLocal(_claveMaestraGuardada())}" placeholder="RPC_CLAVE"></div>
                 <div class="filter-field" style="justify-content:flex-end;"><label style="visibility:hidden">.</label>
                     <label style="display:flex;gap:6px;align-items:center;"><input type="checkbox" id="accVerClave"> Mostrar</label></div>
                 <div class="filter-field" style="justify-content:flex-end;"><label style="visibility:hidden">.</label>
                     <label style="display:flex;gap:6px;align-items:center;white-space:nowrap;"><input type="checkbox" id="accRecordar" checked> Recordar en este equipo</label></div>
+                <div class="filter-field" style="justify-content:flex-end;"><label style="visibility:hidden">.</label>
+                    <button class="btn-outline btn-sm" id="accCargar">Cargar accesos</button></div>
             </div>` : ''}
             <div class="filter-bar">
+                <div class="filter-field" style="min-width:200px;"><label>Nombre del colaborador</label>
+                    <input id="accNombre" placeholder="Ej: Juan Pérez"></div>
                 <div class="filter-field" style="flex:1;min-width:260px;"><label>URL del sitio (donde está publicado el ERP)</label>
                     <input id="accSitio" value="${escAttrLocal(_sitioSugerido())}" placeholder="https://usuario.github.io/repositorio/"></div>
                 <div class="filter-field" style="justify-content:flex-end;"><label style="visibility:hidden">.</label>
-                    <button class="btn-success btn-sm" id="accGenerar">🔗 Ver enlace</button></div>
+                    <label style="display:flex;gap:6px;align-items:center;white-space:nowrap;"><input type="checkbox" id="accAdmin"> Administrador</label></div>
                 <div class="filter-field" style="justify-content:flex-end;"><label style="visibility:hidden">.</label>
-                    <button class="btn-outline btn-sm" id="accNuevo">Generar uno nuevo</button></div>
+                    <button class="btn-success btn-sm" id="accGenerar">🔗 Generar enlace</button></div>
             </div>
             <div id="accResultado" style="margin-top:8px;"></div>
+            <div id="accLista" style="margin-top:10px;"></div>
         </div>`;
 }
 
 function _wireAccesosColaboradores(box) {
     const btn = box.querySelector('#accGenerar');
     if (!btn) return;
-    const btnNuevo = box.querySelector('#accNuevo');
     const res = box.querySelector('#accResultado');
+    const lista = box.querySelector('#accLista');
     const inClave = box.querySelector('#accClave');
-    const inSitio = box.querySelector('#accSitio');
     const claveDispositivo = () => { try { return window.localStorage.getItem('rdm_rpc_key') || ''; } catch (e) { return ''; } };
     const clave = () => (inClave && inClave.value.trim()) || claveDispositivo();
     const recordar = () => {
@@ -26242,9 +26247,10 @@ function _wireAccesosColaboradores(box) {
         try { window.sessionStorage.setItem('rdm_clave_maestra', k); } catch (e) {}
         const rec = box.querySelector('#accRecordar');
         if (rec && rec.checked) {
-            try { if (window.__rdmGuardarClave) window.__rdmGuardarClave(k); else window.localStorage.setItem('rdm_rpc_key', k); } catch (e) {}
+            try { if (window.__rdmGuardarClave) window.__rdmGuardarClave(k); else window.localStorage.setItem('rdm_rpc_key', k); toast('Clave de administrador guardada en este equipo', 'success'); } catch (e) {}
         }
     };
+
     if (inClave) box.querySelector('#accVerClave').addEventListener('change', e => { inClave.type = e.target.checked ? 'text' : 'password'; });
 
     async function copiar(valor) {
@@ -26253,39 +26259,70 @@ function _wireAccesosColaboradores(box) {
         toast('Enlace copiado', 'success');
     }
 
-    async function cargar(regenerar) {
-        if (!servidorDisponible()) { res.innerHTML = '<div class="warn">Sin conexión con la nube.</div>'; return; }
-        if (_urlExecActual() && !clave()) { res.innerHTML = '<div class="page-subtitle">Escribe la clave maestra y pulsa «Ver enlace».</div>'; return; }
-        const sitio = inSitio.value.trim();
-        if (sitio && !/^https:\/\//.test(sitio)) { res.innerHTML = '<div class="warn">Escribe la URL completa del sitio (https://…)</div>'; return; }
-        if (regenerar && !confirm('Se generará un enlace nuevo y el actual dejará de funcionar para todos. ¿Continuar?')) return;
-        btn.disabled = true; btnNuevo.disabled = true;
-        res.innerHTML = '<div class="info">⏳ Preparando enlace…</div>';
+    async function pintarLista() {
+        if (!servidorDisponible()) { lista.innerHTML = '<div class="page-subtitle">Sin conexión con la nube.</div>'; return; }
+        if (_urlExecActual() && !clave()) { lista.innerHTML = '<div class="page-subtitle">Ingresa la clave maestra y pulsa «Cargar accesos» para ver los enlaces generados.</div>'; return; }
+        const inSitio = box.querySelector('#accSitio');
+        if (inSitio && !inSitio.value.trim()) {
+            try { const g = await _llamarMaestra('apiObtenerSitioColaboradores', [], clave()); if (g) inSitio.value = g; } catch (e) {}
+        }
+        lista.innerHTML = '<div class="page-subtitle">⏳ Cargando accesos…</div>';
+        try {
+            const datos = await _llamarMaestra('apiListarAccesosColaboradores', [], clave());
+            recordar();
+            if (!datos || !datos.length) { lista.innerHTML = '<div class="page-subtitle">Aún no hay accesos individuales.</div>'; return; }
+            lista.innerHTML = '<table class="data-table"><thead><tr><th>Colaborador</th><th>Creado</th><th>Enlace</th><th></th></tr></thead><tbody>' +
+                datos.map((a, i) => '<tr><td><b>' + escH(a.nombre) + '</b>' + (a.admin ? ' <span class="page-subtitle">(administrador)</span>' : '') + '</td><td>' + escH(String(a.creado || '').slice(0, 10)) + '</td><td style="min-width:260px;">' +
+                    (a.enlace ? '<input readonly style="width:100%;" data-enl="' + i + '" value="' + escAttrLocal(a.enlace) + '">' : '<span class="page-subtitle">Enlace anterior no recuperable: genera uno nuevo y revoca este.</span>') +
+                    '</td><td style="text-align:right;white-space:nowrap;">' + (a.enlace ? '<button class="btn-outline btn-sm" data-cop="' + i + '">📋 Copiar</button> ' : '') +
+                    '<button class="btn-outline btn-sm" data-rev="' + escAttrLocal(a.nombre) + '">Revocar</button></td></tr>').join('') + '</tbody></table>';
+            lista.querySelectorAll('[data-cop]').forEach(b => b.addEventListener('click', () => copiar(datos[Number(b.dataset.cop)].enlace)));
+            lista.querySelectorAll('[data-enl]').forEach(i => i.addEventListener('focus', () => i.select()));
+            lista.querySelectorAll('[data-rev]').forEach(b => b.addEventListener('click', async () => {
+                if (!confirm('¿Revocar el acceso de ' + b.dataset.rev + '? Dejará de poder usar el ERP con su enlace.')) return;
+                b.disabled = true;
+                try {
+                    await _llamarMaestra('apiRevocarAccesoColaborador', [b.dataset.rev], clave());
+                    toast('Acceso revocado', 'success');
+                } catch (e) { toast('No se pudo revocar: ' + ((e && e.message) || e), 'error'); }
+                pintarLista();
+            }));
+        } catch (e) {
+            const m = (e && e.message) || String(e);
+            lista.innerHTML = /permiso de administrador/.test(m) && !(inClave && inClave.value.trim())
+                ? '<div class="page-subtitle">Este equipo no tiene clave de administrador. Escribe la clave maestra arriba y pulsa «Cargar accesos» o «Generar enlace».</div>'
+                : '<div class="warn">' + escH(m) + '</div>';
+        }
+    }
+
+    btn.addEventListener('click', async () => {
+        if (!servidorDisponible()) { toast('Sin conexión con la nube en este momento', 'warn'); return; }
+        const nombre = box.querySelector('#accNombre').value.trim();
+        const sitio = box.querySelector('#accSitio').value.trim();
+        if (_urlExecActual() && !clave()) { res.innerHTML = '<div class="warn">Ingresa la clave maestra de administrador.</div>'; return; }
+        if (!nombre) { toast('Escribe el nombre del colaborador', 'warn'); return; }
+        if (sitio && !/^https:\/\//.test(sitio)) { toast('Escribe la URL completa del sitio (https://…)', 'warn'); return; }
+        btn.disabled = true;
+        res.innerHTML = '<div class="info">⏳ Generando enlace…</div>';
         try {
             try { window.localStorage.setItem('rdm_sitio', sitio); } catch (e) {}
-            const r = await _llamarMaestra('apiObtenerEnlaceColaboradores', [sitio, _urlExecActual(), !!regenerar], clave());
+            const r = await _llamarMaestra('apiCrearAccesoColaborador', [nombre, _urlExecActual(), sitio, !!(box.querySelector('#accAdmin') && box.querySelector('#accAdmin').checked)], clave());
             recordar();
-            res.innerHTML = `<div class="card card-green"><b>✅ Enlace para colaboradores</b> (compártelo con el equipo):<br>
+            res.innerHTML = `<div class="card card-green"><b>✅ Enlace para ${escH(r.nombre || nombre)}</b> (envíaselo solo a esa persona):<br>
                 <input id="accEnlace" readonly style="width:100%;margin-top:6px;" value="${escAttrLocal(r.enlace)}">
                 <div class="toolbar" style="margin-top:6px;"><button class="btn-outline btn-sm" id="accCopiar">📋 Copiar enlace</button></div></div>`;
             const inp = res.querySelector('#accEnlace');
             inp.addEventListener('focus', () => inp.select());
             res.querySelector('#accCopiar').addEventListener('click', () => copiar(inp.value));
+            box.querySelector('#accNombre').value = '';
+            pintarLista();
         } catch (e) {
-            const m = (e && e.message) || String(e);
-            res.innerHTML = '<div class="warn">❌ ' + escH(m) + '</div>';
-        } finally { btn.disabled = false; btnNuevo.disabled = false; }
-    }
-
-    btn.addEventListener('click', () => cargar(false));
-    btnNuevo.addEventListener('click', () => cargar(true));
-    (async () => {
-        if (!inSitio.value.trim() && servidorDisponible() && (!_urlExecActual() || clave())) {
-            try { const g = await _llamarMaestra('apiObtenerSitioColaboradores', [], clave()); if (g) inSitio.value = g; } catch (e) {}
-        }
-        if (!_urlExecActual() && inSitio.value.trim()) cargar(false);
-        else if (_urlExecActual() && clave() && inSitio.value.trim()) cargar(false);
-    })();
+            res.innerHTML = '<div class="warn">❌ ' + escH((e && e.message) || String(e)) + '</div>';
+        } finally { btn.disabled = false; }
+    });
+    const bc = box.querySelector('#accCargar');
+    if (bc) bc.addEventListener('click', pintarLista);
+    pintarLista();
 }
 
 function _wireSateliteCatalogo(box) {
@@ -27577,47 +27614,7 @@ window.__FIN=(window.__FIN||[]);window.__FIN.push("restauracion integral");</scr
   console.error('[Despliegue] Funciones no disponibles por archivo:', detalleFaltantes,
                  '| __FALLOS:', fallos, '| __ERRORES:', errores);
 
-  function textoScriptDe(archivo) {
-    var marca = '__INICIO.push("' + archivo + '")';
-    var lista = document.scripts;
-    for (var i = 0; i < lista.length; i++) {
-      var t = lista[i].textContent || '';
-      if (t.indexOf(marca) !== -1) return t;
-    }
-    return null;
-  }
-
-  function reejecutar(archivo) {
-    var txt = textoScriptDe(archivo);
-    if (txt === null) return { hallado: false };
-    var captura = [];
-    var escucha = function (ev) { captura.push({ mensaje: ev.message || String(ev.error), linea: ev.lineno, columna: ev.colno }); };
-    window.addEventListener('error', escucha, true);
-    try {
-      var el = document.createElement('script');
-      el.textContent = txt;
-      document.head.appendChild(el);
-    } catch (e) {
-      captura.push({ mensaje: e && e.message ? e.message : String(e) });
-    }
-    window.removeEventListener('error', escucha, true);
-    return { hallado: true, longitud: txt.length, errores: captura };
-  }
-
   document.addEventListener('DOMContentLoaded', function(){
-    var informe = {};
-    ausentes.slice().forEach(function(a){
-      var info = estadoDe(a);
-      if (info.estado !== 'D_o_desconocido' && info.estado !== 'S') return;
-      var r = reejecutar(a);
-      informe[a] = r;
-      var aunFalta = porArchivoTodas[a].filter(function(fn){ return typeof reales[fn] === 'undefined'; });
-      if (!aunFalta.length) {
-        ausentes.splice(ausentes.indexOf(a), 1);
-        console.warn('[Despliegue] ' + a + ' no se había ejecutado; se re-ejecutó correctamente.');
-      }
-    });
-    if (!ausentes.length) return;
     var d = document.createElement('div');
     d.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:99999;background:#b91c1c;' +
                       'color:#fff;padding:11px 16px;font:13px Arial;line-height:1.55;max-height:45vh;overflow:auto;';
@@ -27630,8 +27627,6 @@ window.__FIN=(window.__FIN||[]);window.__FIN.push("restauracion integral");</scr
         explicacion = 'El archivo <code>' + a + '.html</code> no existe en el proyecto de Apps Script. Créalo y pega su contenido completo.';
       } else if (info.estado === 'C') {
         explicacion = 'El archivo <code>' + a + '.html</code> está incompleto (no cierra su etiqueta). Vuelve a pegarlo completo — la última línea debe ser la de cierre de script/estilo.';
-      } else if (informe[a] && informe[a].hallado && informe[a].errores && informe[a].errores.length) {
-        explicacion = 'Al re-ejecutar el archivo apareció este error: "' + informe[a].errores[0].mensaje + '"' + (informe[a].errores[0].linea ? ' (línea ' + informe[a].errores[0].linea + ', columna ' + informe[a].errores[0].columna + ')' : '') + '.';
       } else if (info.estado === 'S') {
         explicacion = 'El archivo <code>' + a + '.html</code> nunca llegó a ejecutarse: su contenido tiene un error de sintaxis o está truncado/pegado incorrectamente en Apps Script. Vuelve a pegarlo completo (debe empezar con <code>&lt;script&gt;</code> y terminar con <code>&lt;/script&gt;</code>) y abre la consola (F12) para ver el error exacto.';
       } else if (info.estado === 'E') {
@@ -27639,8 +27634,6 @@ window.__FIN=(window.__FIN||[]);window.__FIN.push("restauracion integral");</scr
         explicacion = 'El archivo está presente y contiene la función esperada, pero su ejecución se interrumpió antes de registrarla. ' +
           'Revisar el primer error JavaScript' + (primerError ? (': "' + primerError.mensaje + '"' +
           (primerError.linea ? ' (línea ' + primerError.linea + ')' : '')) : '.') + '.';
-      } else if (informe[a] && informe[a].hallado === false) {
-        explicacion = 'El contenido de <code>' + a + '.html</code> no llegó a la página (el servidor no lo entregó). Publica una versión nueva de la implementación.';
       } else {
         explicacion = 'El archivo está presente, cierra correctamente su etiqueta y no se detectó ningún error de JavaScript durante la carga, ' +
           'pero la función no quedó registrada. Revisa manualmente el archivo: puede faltar la línea de exportación (<code>__X.nombreFuncion = nombreFuncion;</code>) ' +
