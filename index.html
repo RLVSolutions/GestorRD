@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Gestor RD Musico · v20261023-1528</title>
+<title>Gestor RD Musico · v20261023-1906</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -26342,7 +26342,7 @@ function _wireAccesosColaboradores(box) {
         if (!servidorDisponible()) { res.innerHTML = '<div class="warn">Sin conexión con la nube.</div>'; return; }
         if (_urlExecActual() && !clave()) { res.innerHTML = '<div class="page-subtitle">Escribe la clave maestra y pulsa «Ver enlace».</div>'; return; }
         const sitio = inSitio.value.trim();
-        if (sitio && !/^https:\/\//.test(sitio)) { res.innerHTML = '<div class="warn">Escribe la URL completa del sitio (https://…)</div>'; return; }
+        if (sitio && !/^https:\/{2}/.test(sitio)) { res.innerHTML = '<div class="warn">Escribe la URL completa del sitio (https://…)</div>'; return; }
         if (regenerar && !confirm('Se generará un enlace nuevo y el actual dejará de funcionar para todos. ¿Continuar?')) return;
         btn.disabled = true; btnNuevo.disabled = true;
         res.innerHTML = '<div class="info">⏳ Preparando enlace…</div>';
@@ -26367,7 +26367,7 @@ function _wireAccesosColaboradores(box) {
     const btnAdm = box.querySelector('#accAdmin');
     if (btnAdm) btnAdm.addEventListener('click', async () => {
         const sitio = inSitio.value.trim();
-        if (!/^https:\/\//.test(sitio)) { res.innerHTML = '<div class="warn">Escribe la URL completa del sitio (https://…)</div>'; return; }
+        if (!/^https:\/{2}/.test(sitio)) { res.innerHTML = '<div class="warn">Escribe la URL completa del sitio (https://…)</div>'; return; }
         btnAdm.disabled = true;
         res.innerHTML = '<div class="info">⏳ Preparando enlace de administrador…</div>';
         try {
