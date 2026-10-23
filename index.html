@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Gestor RD Musico · v20261022-0307</title>
+<title>Gestor RD Musico · v20261023-1528</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -529,6 +529,15 @@ tr:hover { background: #f6eef7; }
 #rdmAct .act-item.err .act-ic { color: #b3261e; }
 #rdmAct .act-tx { flex: 1; word-break: break-word; }
 #rdmAct .act-x { flex: 0 0 auto; border: 0; background: transparent; color: #6b7280; font-size: 18px; line-height: 1; cursor: pointer; padding: 0 2px; margin: 0; }
+.vista-activa { display: contents; }
+.estado-modulo { padding: 18px 20px; border-radius: 10px; }
+.estado-carga { background: #fff; border: 1px solid #e3e6ee; }
+.estado-carga .esq-barra { height: 14px; width: 38%; border-radius: 7px; background: linear-gradient(90deg,#eceef4 25%,#f6f7fb 50%,#eceef4 75%); background-size: 200% 100%; animation: rdmEsq 1.3s ease-in-out infinite; margin-bottom: 14px; }
+.estado-carga .esq-linea { height: 11px; width: 92%; border-radius: 6px; background: linear-gradient(90deg,#eceef4 25%,#f6f7fb 50%,#eceef4 75%); background-size: 200% 100%; animation: rdmEsq 1.3s ease-in-out infinite; margin-bottom: 10px; }
+.estado-carga .esq-linea.corta { width: 60%; }
+.estado-error { border-left: 4px solid #b3261e; }
+.estado-error h2 { color: #b3261e; }
+@keyframes rdmEsq { to { background-position: -200% 0; } }
 </style>
 
 </head>
@@ -1061,7 +1070,7 @@ function protegerRender(nombre, caja, fn) {
             if (caja && !String(caja.innerHTML || '').trim()) {
                 setTimeout(() => {
                     if (!listo && caja && !String(caja.innerHTML || '').trim()) {
-                        caja.innerHTML = '<div class="info" id="_cargando">⏳ Cargando ' + nombre + '…</div>';
+                        caja.innerHTML = '<div class="estado-modulo estado-carga" id="_cargando"><div class="esq-barra"></div><div class="esq-linea"></div><div class="esq-linea corta"></div><div class="page-subtitle">Preparando información…</div></div>';
                     }
                 }, 180);
             }
@@ -1069,23 +1078,21 @@ function protegerRender(nombre, caja, fn) {
                 const c = caja && caja.querySelector ? caja.querySelector('#_cargando') : null;
                 if (c && c.remove) c.remove();
                 return v;
-            }).catch(err => _avisoRender(nombre, caja, err));
+            }).catch(err => _avisoRender(nombre, caja, err, () => protegerRender(nombre, caja, fn)));
         }
         return r;
     } catch (err) {
-        _avisoRender(nombre, caja, err);
+        _avisoRender(nombre, caja, err, () => protegerRender(nombre, caja, fn));
     }
 }
-function _avisoRender(nombre, caja, err) {
+function _avisoRender(nombre, caja, err, reintentar) {
     console.error('[' + nombre + ']', err);
     if (!caja) return;
-    caja.innerHTML = `
-        <div class="section" style="border-left:4px solid #dc2626;">
-            <h2 style="color:#b91c1c;">No se pudo mostrar ${escH(nombre)}</h2>
-            <div class="page-subtitle" style="margin-bottom:8px;">${escH(String(err && err.message || err))}</div>
-            <div class="info">El resto de la aplicación sigue funcionando. Si el problema persiste,
-            avisa indicando en qué pantalla ocurre.</div>
-        </div>`;
+    caja.innerHTML = '<div class="section estado-modulo estado-error"><h2>No fue posible actualizar la información</h2>' +
+        '<div class="page-subtitle" style="margin-bottom:10px;">Intente nuevamente. Si el problema continúa, avise indicando en qué pantalla ocurre.</div>' +
+        '<button class="btn-primary btn-sm" data-reintentar="1">Reintentar</button></div>';
+    const b = caja.querySelector('[data-reintentar]');
+    if (b && typeof reintentar === 'function') b.addEventListener('click', reintentar);
 }
 __X.escH = escH; __X.escAttr = escAttr; __X.toast = toast; __X.protegerRender = protegerRender;
 const actividad = (function () {
@@ -1190,7 +1197,7 @@ function _cerrarLectura() {
         const ahora = Date.now();
         if (msg === ultimo && ahora - ultimoT < 5000) return;
         ultimo = msg; ultimoT = ahora;
-        actividad.iniciar('').error('Falló un proceso: ' + msg.slice(0, 240));
+        console.error('[diagnóstico] ' + msg.slice(0, 400));
     }
     window.addEventListener('unhandledrejection', function (ev) {
         const r = ev.reason;
@@ -2179,12 +2186,13 @@ const _NOMBRES_PROCESO = {
     apiEmpujarCatalogoSatelite: 'Enviando catálogo al satélite', apiGuardarCatalogo: 'Guardando catálogo en la nube'
 };
 function _nombreProceso(f) { return _NOMBRES_PROCESO[f] || (_ESCRITURAS.test(f) ? 'Guardando en la nube' : 'Consultando la nube'); }
-let _lentas = 0, _lentaH = null, _falloH = null, _falloN = 0, _falloT = 0;
+let _falloH = null, _falloN = 0, _falloT = 0;
 function _falloLlamada(que, motivo) {
     const ahora = Date.now();
     if (!_falloH || !_falloH.vivo() || ahora - _falloT > 8000) { _falloN = 0; _falloH = __X.actividad.iniciar(''); }
     _falloN++; _falloT = ahora;
-    _falloH.error(que + ' falló' + (_falloN > 1 ? ' (' + _falloN + ' veces)' : '') + ': ' + motivo);
+    _falloH.error(que + ' no se pudo completar' + (_falloN > 1 ? ' (' + _falloN + ' veces)' : '') + '. Se reintentará al sincronizar.');
+    console.warn('[sync] ' + que + ': ' + motivo);
 }
 function _llamarConTimeout(funcion, timeoutMs, args) {
     return new Promise((resolve, reject) => {
@@ -2192,24 +2200,10 @@ function _llamarConTimeout(funcion, timeoutMs, args) {
         let resuelto = false;
         const silenciosa = funcion === 'apiPing' || funcion === 'apiAgregarBitacora';
         if (__X.marcarLlamada) __X.marcarLlamada(1);
-        let lenta = false;
-        const avisoLento = silenciosa ? null : setTimeout(() => {
-            if (resuelto) return;
-            lenta = true; _lentas++;
-            if (!_lentaH || !_lentaH.vivo()) _lentaH = __X.actividad.iniciar('');
-            _lentaH.texto(_nombreProceso(funcion) + '… (' + _lentas + ' en curso)');
-        }, 2500);
         const terminar = (falla) => {
-            resuelto = true; clearTimeout(temporizador); clearTimeout(avisoLento);
+            resuelto = true; clearTimeout(temporizador);
             if (__X.marcarLlamada) __X.marcarLlamada(-1);
-            if (lenta) {
-                _lentas = Math.max(0, _lentas - 1);
-                if (_lentaH && _lentaH.vivo()) {
-                    if (_lentas > 0) _lentaH.texto(_nombreProceso(funcion) + '… (' + _lentas + ' en curso)');
-                    else _lentaH.cerrar();
-                }
-            }
-            if (falla && !silenciosa && (_ESCRITURAS.test(funcion) || lenta)) {
+            if (falla && !silenciosa && _ESCRITURAS.test(funcion)) {
                 if (__X.registrarErrorProceso) __X.registrarErrorProceso(falla.message);
                 _falloLlamada(_nombreProceso(funcion), falla.message);
             }
@@ -4343,39 +4337,47 @@ function subActual() {
 let _onCambio = null;
 function alCambiar(cb) { _onCambio = cb; }
 
-function _dibujarProtegido(id, dibujar) {
-    const caja = _cont;
+let _token = 0;
+
+function _esqueleto() {
+    return '<div class="estado-modulo estado-carga" id="_cargandoTop"><div class="esq-barra"></div><div class="esq-linea"></div><div class="esq-linea corta"></div><div class="page-subtitle">Preparando información…</div></div>';
+}
+
+function _estadoError(vista, id, err, reintentar) {
+    console.error('[' + id + ']', err);
+    if (!vista || !vista.isConnected) return;
+    vista.innerHTML = '<div class="section estado-modulo estado-error"><h2>No fue posible actualizar la información</h2>'
+        + '<div class="page-subtitle" style="margin-bottom:10px;">Intente nuevamente. Si el problema continúa, avise indicando en qué pantalla ocurre.</div>'
+        + '<button class="btn-primary btn-sm" data-reintentar="1">Reintentar</button></div>';
+    const b = vista.querySelector('[data-reintentar]');
+    if (b) b.addEventListener('click', reintentar);
+}
+
+function _dibujarProtegido(id, dibujar, mi, vista) {
+    const vigente = () => mi === _token && vista.isConnected;
+    const reintentar = () => { if (vigente()) _render(); };
     try {
-        const r = dibujar(caja);
+        const r = dibujar(vista);
         if (r && typeof r.then === 'function') {
             let listo = false;
             r.then(() => { listo = true; }, () => { listo = true; });
-            if (caja && !String(caja.innerHTML || '').trim()) {
-                setTimeout(() => {
-                    if (!listo && caja && !String(caja.innerHTML || '').trim()) {
-                        caja.innerHTML = '<div class="info" id="_cargandoTop">⏳ Cargando ' + id + '…</div>';
-                    }
-                }, 180);
-            }
-            r.then(() => {
-                const c = caja && caja.querySelector ? caja.querySelector('#_cargandoTop') : null;
-                if (c && c.remove) c.remove();
-            }).catch(err => _avisoFallo(id, err));
             setTimeout(() => {
-                if (!listo) _avisoFallo(id, new Error('La pantalla no respondió a tiempo (posible bloqueo de almacenamiento local en este navegador/entorno).'));
-            }, 15000);
+                if (!listo && vigente() && !String(vista.innerHTML || '').trim()) vista.innerHTML = _esqueleto();
+            }, 150);
+            setTimeout(() => {
+                if (!listo && vigente()) {
+                    const c = vista.querySelector('#_cargandoTop');
+                    if (c && !c.querySelector('.lento')) c.insertAdjacentHTML('beforeend', '<div class="page-subtitle lento">La carga está tardando más de lo habitual. Aguarde unos segundos.</div>');
+                }
+            }, 12000);
+            r.then(() => {
+                const c = vista.querySelector('#_cargandoTop');
+                if (c && c.remove) c.remove();
+            }).catch(err => { if (vigente()) _estadoError(vista, id, err, reintentar); else console.warn('[' + id + '] respuesta obsoleta descartada', err); });
         }
     } catch (err) {
-        _avisoFallo(id, err);
+        if (vigente()) _estadoError(vista, id, err, reintentar);
     }
-}
-
-function _avisoFallo(id, err) {
-    console.error('[' + id + ']', err);
-    if (!_cont) return;
-    _cont.innerHTML = '<div class="section" style="border-left:4px solid #dc2626;">'
-        + '<h2 style="color:#b91c1c;">No se pudo mostrar ' + id + '</h2>'
-        + '<div class="page-subtitle">' + String((err && err.message) || err) + '</div></div>';
 }
 
 function _render() {
@@ -4383,9 +4385,13 @@ function _render() {
     const id = _idActual();
     if (_onCambio) { try { _onCambio(id, subActual()); } catch (e) {} }
     const dibujar = _vistas.get(id);
+    const mi = ++_token;
     _cont.innerHTML = '';
-    if (dibujar) _dibujarProtegido(id, dibujar);
-    else _cont.innerHTML = `<div class="warn">No se encontró la pantalla "<b>${id}</b>".</div>`;
+    const vista = document.createElement('div');
+    vista.className = 'vista-activa';
+    _cont.appendChild(vista);
+    if (dibujar) _dibujarProtegido(id, dibujar, mi, vista);
+    else vista.innerHTML = '<div class="estado-modulo estado-vacio"><div class="page-subtitle">Esta pantalla no está disponible.</div></div>';
 }
 
 function iniciar(contenedor) {
@@ -16216,6 +16222,42 @@ const { registrarGestion, abrirBitacoraFactura } = __X;
 const KEY = 'descargosState';
 let _d = {};
 let _ultimoDoc = null;
+let _selDescFn = () => [];
+
+function _acreedorElegido() {
+    return _acreedores.find(x => x.id === _d.acreedorId) || _acreedores.find(x => x.predeterminado) || (_acreedores.length === 1 ? _acreedores[0] : null);
+}
+
+function _aplicarAcreedor() {
+    const a = _acreedorElegido();
+    if (!a) return null;
+    _d.acreedorId = a.id;
+    _d.provRazon = a.razon || ''; _d.provRut = a.rut || ''; _d.provRep = a.rep || '';
+    _d.provEmail = a.email || ''; _d.provTel = a.tel || '';
+    if (!_d.lugar && a.ciudad) _d.lugar = a.ciudad;
+    return a;
+}
+
+async function _aplicarOrganismoDeSeleccion() {
+    const sel = _selDescFn();
+    if (!sel.length) return { ok: true, cambio: false };
+    const claves = new Set(sel.map(dd => (__X.normalizarRut ? __X.normalizarRut(dd.rut || '') : String(dd.rut || '')) || String(dd.razon || '').trim().toLowerCase()));
+    if (claves.size > 1) return { ok: false, error: 'Los documentos seleccionados pertenecen a más de un organismo. Seleccione documentos de un solo organismo.' };
+    const dd = sel[0];
+    let dir = '';
+    try {
+        const clientes = (await store.lista('clientes')) || [];
+        const rutN = __X.normalizarRut ? __X.normalizarRut(dd.rut || '') : String(dd.rut || '');
+        const cli = clientes.find(c => (__X.normalizarRut ? __X.normalizarRut(c.rut || '') : String(c.rut || '')) === rutN);
+        if (cli) dir = cli.direccion || '';
+    } catch (e) {}
+    _d.orgNombre = dd.razon || _d.orgNombre || '';
+    _d.orgRut = dd.rut || _d.orgRut || '';
+    if (dir) _d.orgDir = dir;
+    if (!_d.facturaMora && sel.length === 1) _d.facturaMora = dd.factura || dd.numero || '';
+    _save();
+    return { ok: true, cambio: true };
+}
 
 async function renderDescargos(box) {
     _acreedores = await cargarAcreedores();
@@ -16229,6 +16271,7 @@ async function renderDescargos(box) {
     await T.cargarTasas();
     _d = await store.get(KEY, {}) || {};
     if (!Array.isArray(_d.causales)) _d.causales = [];
+    _aplicarAcreedor();
     _dibujar(box);
 }
 function _save() { store.set(KEY, _d); }
@@ -16285,6 +16328,15 @@ function _dibujar(box) {
         '</tr></thead>' +
         '<tbody id="descBody"></tbody>' +
         '</table></div><div id="descModal"></div></div>' +
+        '<div class="section"><h2>Acreedor y organismo deudor</h2><div class="filter-bar">' +
+        '<div class="filter-field"><label>Acreedor (Configuración)</label><select id="descAcr">' +
+        (_acreedores.length ? _acreedores.map(a => '<option value="' + escAttr(a.id) + '"' + (a.id === _d.acreedorId ? ' selected' : '') + '>' + escH(a.razon || a.rut || a.id) + '</option>').join('') : '<option value="">(sin acreedores registrados)</option>') +
+        '</select></div>' +
+        '<div class="filter-field"><label>Ciudad / lugar</label><input data-k="lugar" value="' + escAttr(v('lugar')) + '"></div>' +
+        '<div class="filter-field"><label>Organismo deudor</label><input data-k="orgNombre" value="' + escAttr(v('orgNombre')) + '"></div>' +
+        '<div class="filter-field"><label>RUT organismo</label><input data-k="orgRut" value="' + escAttr(v('orgRut')) + '"></div>' +
+        '<div class="filter-field" style="flex:1;min-width:220px;"><label>Dirección organismo</label><input data-k="orgDir" value="' + escAttr(v('orgDir')) + '"></div>' +
+        '</div><div class="page-subtitle" id="descResumenAcr"></div></div>' +
         '<div class="section"><h2>Situación de la factura</h2>' +
         '<div class="opcion-item"><input type="radio" name="sit" value="alDia"' + (sit==='alDia'?' checked':'') + '> Al día (sin mora)</div>' +
         '<div class="opcion-item"><input type="radio" name="sit" value="mora"' + (sit==='mora'?' checked':'') + '> En mora</div>' +
@@ -16324,6 +16376,9 @@ function _dibujar(box) {
     const g=id=>box.querySelector(id)||_nulo;
     if(g('#descVolver').addEventListener)g('#descVolver').addEventListener('click',()=>{location.hash='#/dashboard';});
     let _descDocs=[];const _descSel=new Set();
+    _selDescFn=()=>_descDocs.filter(dd=>_descSel.has(dd.factura||dd.numero||''));
+    const _resumenAcr=()=>{const a=_acreedorElegido();const r=box.querySelector('#descResumenAcr');if(r)r.textContent=a?('Datos del acreedor: '+[a.razon,a.rut,a.rep,a.email,a.tel].filter(Boolean).join(' · ')):'No hay acreedor registrado: créelo en Configuración → Acreedores.';};
+    const _refrescarOrg=async()=>{const r=await _aplicarOrganismoDeSeleccion();if(!r.ok){toast(r.error,'warn',6000);return;}if(r.cambio)['orgNombre','orgRut','orgDir','lugar'].forEach(k=>{const el=box.querySelector('[data-k="'+k+'"]');if(el)el.value=_d[k]||'';});};
     const _pintarDesc=async()=>{
 
         if (__X.cargar) await __X.cargar();
@@ -16351,7 +16406,7 @@ function _dibujar(box) {
                 '<td style="text-align:center"><span class="badge '+(dias>0?'badge-red':'badge-green')+'">'+dias+'</span></td>'+
                 '<td style="text-align:center"><span class="badge badge-blue">Descargo</span></td>'+
                 '<td style="text-align:center"><button class="btn-icon btn-primary" data-bit-desc="1" title="Bitácora de gestiones">\u{1F4CB}'+((dd.bitacora||[]).length?'<sup>'+dd.bitacora.length+'</sup>':'')+'</button></td>';
-            tr.querySelector('.descChk').addEventListener('change',e=>{if(e.target.checked)_descSel.add(id);else _descSel.delete(id);_pintarDesc();});
+            tr.querySelector('.descChk').addEventListener('change',async e=>{if(e.target.checked)_descSel.add(id);else _descSel.delete(id);_pintarDesc();await _refrescarOrg();});
 
             const btnBitDesc = tr.querySelector('[data-bit-desc]');
             if (btnBitDesc) btnBitDesc.addEventListener('click', () => {
@@ -16395,6 +16450,9 @@ function _dibujar(box) {
         if(cb)cb.style.display=e.target.value==='bloqueada'?'block':'none';
     }));
     box.querySelectorAll('[data-k]').forEach(el=>el.addEventListener('input',e=>{salvar(e.target.dataset.k,e.target.value);}));
+    const selAcr=box.querySelector('#descAcr');
+    if(selAcr)selAcr.addEventListener('change',e=>{_d.acreedorId=e.target.value;_save();_aplicarAcreedor();_resumenAcr();});
+    _resumenAcr();
     box.querySelectorAll('.cauChk').forEach(chk=>chk.addEventListener('change',()=>{_d.causales=Array.from(box.querySelectorAll('.cauChk:checked')).map(c=>c.value);salvar('causales',_d.causales);}));
     g('#descLimpiar').addEventListener('click',()=>{_descSel.clear();_d={};_save();_dibujar(box);toast('Formulario limpiado','info');});
 
@@ -16432,6 +16490,16 @@ async function _generar(box) {
     if (textoBitacoraDesc && confirm('¿Desea incorporar el registro de la bitácora de esta factura como antecedente adicional del descargo?')) {
         hechosLibresDesc = (hechosLibresDesc ? hechosLibresDesc + '\n\n' : '') + textoBitacoraDesc;
     }
+    _acreedores = await cargarAcreedores();
+    _aplicarAcreedor();
+    const rOrg = await _aplicarOrganismoDeSeleccion();
+    if (!rOrg.ok) { toast(rOrg.error, 'error', 7000); return null; }
+    const faltan = [];
+    if (!_d.provRazon) faltan.push('Acreedor (razón social)');
+    if (!_d.provRut) faltan.push('RUT del acreedor');
+    if (!_d.lugar) faltan.push('Ciudad / lugar');
+    if (!_d.orgNombre) faltan.push('Organismo deudor');
+    if (faltan.length) { toast('Faltan datos obligatorios: ' + faltan.join(', ') + '. Complételos antes de generar el documento.', 'error', 8000); return null; }
     const input = {
         situacion, argumentos, tasaCMF: T.getUltimaTasa(),
         prov: { razon: _d.provRazon, rut: _d.provRut, rep: _d.provRep, email: _d.provEmail, tel: _d.provTel },
@@ -26237,6 +26305,8 @@ function _seccionAccesosColaboradores() {
                     <button class="btn-success btn-sm" id="accGenerar">🔗 Ver enlace</button></div>
                 <div class="filter-field" style="justify-content:flex-end;"><label style="visibility:hidden">.</label>
                     <button class="btn-outline btn-sm" id="accNuevo">Generar uno nuevo</button></div>
+                ${usaClave ? '' : `<div class="filter-field" style="justify-content:flex-end;"><label style="visibility:hidden">.</label>
+                    <button class="btn-outline btn-sm" id="accAdmin">🛡️ Enlace de administrador</button></div>`}
             </div>
             <div id="accResultado" style="margin-top:8px;"></div>
         </div>`;
@@ -26294,6 +26364,26 @@ function _wireAccesosColaboradores(box) {
 
     btn.addEventListener('click', () => cargar(false));
     btnNuevo.addEventListener('click', () => cargar(true));
+    const btnAdm = box.querySelector('#accAdmin');
+    if (btnAdm) btnAdm.addEventListener('click', async () => {
+        const sitio = inSitio.value.trim();
+        if (!/^https:\/\//.test(sitio)) { res.innerHTML = '<div class="warn">Escribe la URL completa del sitio (https://…)</div>'; return; }
+        btnAdm.disabled = true;
+        res.innerHTML = '<div class="info">⏳ Preparando enlace de administrador…</div>';
+        try {
+            try { window.localStorage.setItem('rdm_sitio', sitio); } catch (e) {}
+            const r = await llamar('apiObtenerEnlaceAdministrador', sitio, '', false);
+            res.innerHTML = `<div class="card card-green"><b>🛡️ Enlace de administrador</b> (úsalo solo tú; permite gestionar accesos desde GitHub):<br>
+                <input id="accEnlaceAdm" readonly style="width:100%;margin-top:6px;" value="${escAttrLocal(r.enlace)}">
+                <div class="toolbar" style="margin-top:6px;"><button class="btn-outline btn-sm" id="accCopiarAdm">📋 Copiar enlace</button></div></div>`;
+            const inp = res.querySelector('#accEnlaceAdm');
+            inp.addEventListener('focus', () => inp.select());
+            res.querySelector('#accCopiarAdm').addEventListener('click', () => copiar(inp.value));
+        } catch (e) {
+            const m = (e && e.message) || String(e);
+            res.innerHTML = '<div class="warn">❌ ' + escH(/is not a function/i.test(m) ? 'El servidor no tiene la versión nueva de Rpc.gs: reemplázala y publica «Versión nueva».' : m) + '</div>';
+        } finally { btnAdm.disabled = false; }
+    });
     (async () => {
         if (!inSitio.value.trim() && servidorDisponible() && (!_urlExecActual() || clave())) {
             try { const g = await _llamarMaestra('apiObtenerSitioColaboradores', [], clave()); if (g) inSitio.value = g; } catch (e) {}
