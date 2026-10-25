@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Gestor RD Musico · v20261023-1906</title>
+<title>Gestor RD Musico · v20261025-2100</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -2146,7 +2146,7 @@ async function eliminarDeColeccionResto(clave, idValor, usuario) {
 
 let _estadoGlobal = 'inactivo';
 const _suscriptoresEstado = [];
-const _ESCRITURAS = /^api(Guardar|Fusionar|Cambiar|Agregar|Empujar|Eliminar)/;
+const _ESCRITURAS = /^api(Guardar|Fusionar|Cambiar|Agregar|Empujar|Eliminar|Aplicar)/;
 let _enVuelo = 0;
 let _errorEscritura = '';
 let _conexion = 'desconocida';
@@ -2182,7 +2182,7 @@ function llamarLento(funcion, ...args) {
 }
 
 const _NOMBRES_PROCESO = {
-    apiFusionarRegistroSensible: 'Guardando registros en la nube', apiGuardarColeccion: 'Guardando datos en la nube',
+    apiFusionarRegistroSensible: 'Guardando registros en la nube', apiAplicarPagosCC: 'Aplicando pagos en la nube', apiGuardarColeccion: 'Guardando datos en la nube',
     apiEmpujarCatalogoSatelite: 'Enviando catálogo al satélite', apiGuardarCatalogo: 'Guardando catálogo en la nube'
 };
 function _nombreProceso(f) { return _NOMBRES_PROCESO[f] || (_ESCRITURAS.test(f) ? 'Guardando en la nube' : 'Consultando la nube'); }
@@ -2408,7 +2408,7 @@ async function subirTodoNuevo(onEstado, onProgreso) {
             const regs = await store.lista(def.claveLocal);
             let fallos = 0, primero = '';
             await _enParalelo(regs, 4, async (r) => {
-                try { await llamar('apiFusionarRegistroSensible', modulo, r.id, r, r.actualizado, usuario); }
+                try { await llamar('apiFusionarRegistroSensible', modulo, r.id, (modulo === 'cuentasCorrientes' && __X.serializarCC) ? __X.serializarCC(r) : r, r.actualizado, usuario); }
                 catch (e) { fallos++; if (!primero) primero = e.message; }
             }, (h, n) => prog(def.etiqueta + ' ' + h + '/' + n));
             if (fallos) throw new Error(fallos + ' de ' + regs.length + ' registros no se enviaron: ' + primero);
@@ -2620,7 +2620,38 @@ let _sincronizando = false;
 
 let _progresoSync = null;
 
-async function sincronizarAhora(onEstado, onProgreso) {
+async function subirPendientes(onEstado, onProgreso) {
+    let ok = 0, err = 0, registros = 0;
+    const u = __X.getUsuarioActual ? __X.getUsuarioActual() : null;
+    const usuario = u ? u.nombre : '';
+    try { await _vaciarColaBitacora(); } catch (e) {}
+    try {
+        const locales = await store.lista('cuentasCorrientes');
+        const hayPendientes = (locales || []).some(d => d && d._pendienteSync === true);
+        if (hayPendientes && __X.cargar && __X.docs && __X.fusionarCamposCC) {
+            await __X.cargar();
+            const pend = __X.docs().filter(d => d._pendienteSync === true);
+            let fallos = 0, primero = '';
+            await _enParalelo(pend, 4, async (d) => {
+                try {
+                    const r = await __X.fusionarCamposCC(d, d, usuario);
+                    if (!r || r.offline || (r.ok === false && !r.masReciente)) { fallos++; if (!primero) primero = 'sin confirmación de la nube'; }
+                } catch (e) { fallos++; if (!primero) primero = e.message; }
+            }, (h, n) => { if (onProgreso) onProgreso(h, n, 'Cuentas Corrientes'); });
+            if (fallos) throw new Error(fallos + ' de ' + pend.length + ' documentos pendientes no se enviaron: ' + primero);
+            registros += pend.length;
+            if (onEstado) onEstado('Cuentas Corrientes', 'ok', pend.length, 'pendientes enviados');
+        }
+        ok++;
+    } catch (e) {
+        err++;
+        if (onEstado) onEstado('Cuentas Corrientes', 'error', 0, e.message);
+    }
+    try { await llamar('apiPing'); } catch (e) { err++; if (onEstado) onEstado('Conexión', 'error', 0, e.message); }
+    return { ok, err, registros };
+}
+
+async function sincronizarAhora(onEstado, onProgreso, completo) {
     if (_sincronizando) return { ok: false, ocupado: true };
     if (!servidorDisponible()) return { ok: false, motivo: 'sin_servidor', errores: 1, detalle: ['Sin conexión con el servidor'] };
     _sincronizando = true;
@@ -2629,7 +2660,7 @@ async function sincronizarAhora(onEstado, onProgreso) {
     const fallos = [];
     let r = { ok: 0, err: 0, registros: 0 };
     try {
-        r = await subirTodoNuevo(function (et, tipo, cantidad, detalle) {
+        r = await (completo === true ? subirTodoNuevo : subirPendientes)(function (et, tipo, cantidad, detalle) {
             if (tipo !== 'ok') fallos.push(et + ': ' + (detalle || 'error'));
             if (onEstado) onEstado(et, tipo, cantidad, detalle);
         }, function (n, total, txt) {
@@ -15198,7 +15229,16 @@ g('#btnLimpiar').addEventListener('click', () => _limpiar(box));
 
 function _seleccionadas(){ return estado.facturas.filter(f => f.seleccionado); }
 
+function _claveFactura(f) {
+    const bruto = String(f.factura || f.numero || '').trim();
+    const num = bruto.replace(/[^\d]/g, '').replace(/^0+/, '') || bruto.toUpperCase();
+    const rut = String(f.rut || '').replace(/[^0-9kK]/g, '').toUpperCase();
+    return num + '|' + rut + '|' + Math.round(Number(f.montoTotal != null ? f.montoTotal : f.monto) || 0);
+}
+
 function _push(nueva) {
+    const clave = _claveFactura(nueva);
+    if (estado.facturas.some(f => _claveFactura(f) === clave)) return false;
     const venc = calcVencimiento(nueva.fechaEmision);
 
     const saldo = nueva.saldo != null ? Number(nueva.saldo) : (Number(nueva.montoTotal) || 0);
@@ -15207,23 +15247,24 @@ function _push(nueva) {
         razon: nueva.razon || '', fechaEmision: nueva.fechaEmision, vencimiento: venc,
         montoTotal: Number(nueva.montoTotal) || 0, saldo: saldo, diasAtraso: calcDiasAtraso(venc), uf: 0, interesTotal: 0, detalleInteres: []
     });
+    return true;
 }
 
 function _pegar(box){
     const texto = prompt('Pega filas (Orden, Factura, RUT, Razón, Emisión, Monto), separadas por tab/coma/;:');
     if (!texto) return;
     toast('⏳ Procesando filas pegadas…', 'default');
-    let n = 0;
+    let n = 0, omitidas = 0;
     texto.trim().split(/\r?\n/).forEach(line => {
         const p = line.split(/\t|,|;/);
         if (p.length >= 6) {
             const fecha = parseFechaEstricta(p[4].trim()) || new Date().toISOString().slice(0, 10);
-            _push({ orden: p[0].trim(), factura: p[1].trim(), rut: p[2].trim(), razon: p[3].trim(), fechaEmision: fecha, montoTotal: parseFloat(p[5].trim()) || 0 });
-            n++;
+            if (_push({ orden: p[0].trim(), factura: p[1].trim(), rut: p[2].trim(), razon: p[3].trim(), fechaEmision: fecha, montoTotal: parseFloat(p[5].trim()) || 0 })) n++; else omitidas++;
         }
     });
-    if (!n) { toast('No se pudo parsear (revisa que haya 6 columnas)', 'error'); return; }
-    guardarEstado(); _refrescar(box); toast(`${n} factura(s) pegadas`, 'success');
+    if (!n && !omitidas) { toast('No se pudo parsear (revisa que haya 6 columnas)', 'error'); return; }
+    if (!n) { toast(`${omitidas} fila(s) omitidas: esas facturas ya estaban cargadas`, 'warn'); return; }
+    guardarEstado(); _refrescar(box); toast(`${n} factura(s) pegadas` + (omitidas ? ` · ${omitidas} omitida(s) por estar repetidas` : ''), 'success');
 }
 
 function _importarExcel(box){
@@ -15238,17 +15279,17 @@ function _importarExcel(box){
             try {
                 const wb = XLSX.read(new Uint8Array(ev.target.result), { type: 'array' });
                 const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' });
-                let n = 0;
+                let n = 0, omitidas = 0;
                 for (let i = 1; i < rows.length; i++) {
                     const row = rows[i]; if (!row || row.length < 6) continue;
                     let fecha = row[4];
                     if (typeof fecha === 'number') fecha = XLSX.SSF.format('yyyy-mm-dd', fecha);
                     else fecha = parseFechaEstricta(String(fecha).trim()) || new Date().toISOString().slice(0, 10);
-                    _push({ orden: String(row[0] || ''), factura: String(row[1] || ''), rut: String(row[2] || ''), razon: String(row[3] || ''), fechaEmision: fecha, montoTotal: parseFloat(row[5]) || 0 });
-                    n++;
+                    if (_push({ orden: String(row[0] || ''), factura: String(row[1] || ''), rut: String(row[2] || ''), razon: String(row[3] || ''), fechaEmision: fecha, montoTotal: parseFloat(row[5]) || 0 })) n++; else omitidas++;
                 }
+                if (!n && omitidas) { toast(`${omitidas} fila(s) omitidas: esas facturas ya estaban cargadas`, 'warn'); return; }
                 if (!n) { toast('No se encontraron filas válidas', 'warn'); return; }
-                guardarEstado(); _refrescar(box); toast(`${n} factura(s) importadas`, 'success');
+                guardarEstado(); _refrescar(box); toast(`${n} factura(s) importadas` + (omitidas ? ` · ${omitidas} omitida(s) por estar repetidas` : ''), 'success');
             } catch (err) { toast('Error al leer el archivo', 'error'); }
         };
         reader.readAsArrayBuffer(file);
@@ -17417,15 +17458,23 @@ function docs(){ return _docs; }
 const CC_CAMPOS_JSON = ['multaDetalle', 'historialAsignacion', 'adjuntos', 'contactos', 'bitacora', 'rutaAreas', 'derivaciones', 'aplicacionesNC', 'ncOrigenes', 'movimientos', 'planRecuperacion'];
 function _serializarCC(campos){
     const out = Object.assign({}, campos);
+    const ilegibles = Array.isArray(out._ilegibles) ? out._ilegibles : [];
+    ilegibles.forEach(function(c){ delete out[c]; });
+    delete out._ilegibles;
+    delete out._pendienteSync;
     CC_CAMPOS_JSON.forEach(function(c){ if(out[c] !== undefined) out[c] = JSON.stringify(out[c]); });
     return out;
 }
 function _deserializarCC(fila){
     const out = Object.assign({}, fila);
+    const vacio = function(c){ return (c === 'multaDetalle' || c === 'planRecuperacion') ? null : []; };
+    const ilegibles = [];
     CC_CAMPOS_JSON.forEach(function(c){
-        if(typeof out[c] !== 'string' || !out[c]){ out[c] = (c === 'multaDetalle' || c === 'planRecuperacion') ? null : []; return; }
-        try { out[c] = JSON.parse(out[c]); } catch(e){ out[c] = (c === 'multaDetalle' || c === 'planRecuperacion') ? null : []; }
+        if(typeof out[c] !== 'string' || !out[c]){ out[c] = vacio(c); return; }
+        try { out[c] = JSON.parse(out[c]); }
+        catch(e){ out[c] = vacio(c); ilegibles.push(c); }
     });
+    if(ilegibles.length){ out._ilegibles = ilegibles; console.warn('[diagnóstico] CC ' + out.id + ': campo(s) ilegible(s) en la nube, no se sobrescribirán: ' + ilegibles.join(', ')); }
     return out;
 }
 __X.deserializarCC = _deserializarCC;
@@ -18683,7 +18732,8 @@ const { calcVencimiento, calcDiasAtraso } = __X;
 let _pag = null;
 
 function _claveDocCC(d) {
-    const numero = String((d && (d.numero || d.factura)) || '').replace(/\.0+$/, '').trim();
+    let numero = String((d && (d.numero || d.factura)) || '').replace(/\.0+$/, '').trim();
+    if (/^\d+$/.test(numero)) numero = numero.replace(/^0+(?=\d)/, '');
     const rut = String((d && d.rut) || '').replace(/[.\-]/g, '').toUpperCase().trim();
     const monto = Math.round(Number((d && d.monto)) || 0);
     return numero + '|' + rut + '|' + monto;
@@ -19639,12 +19689,24 @@ function _pegar(){
 function _subirTocadosCC(docs, u){
     if(!docs.length) return;
     const h = __X.actividad.iniciar('Enviando ' + docs.length + ' documento(s) de Cuentas Corrientes a la nube…');
-    Promise.all(docs.map(d => Promise.resolve(__X.fusionarCamposCC(d, d, u ? u.nombre : '')).then(() => null, e => (e && e.message) || 'error')))
-        .then(res => {
-            const fallos = res.filter(Boolean);
-            if(!fallos.length) h.ok(docs.length + ' documento(s) sincronizados con la nube.');
-            else h.error(fallos.length + ' de ' + docs.length + ' documento(s) quedaron solo en este equipo: ' + fallos[0]);
-        });
+    const fallos = [];
+    let i = 0, hechos = 0;
+    const nombre = u ? u.nombre : '';
+    const trabajadores = Array.from({ length: Math.min(4, docs.length) }, async () => {
+        while(i < docs.length){
+            const d = docs[i++];
+            try {
+                const r = await __X.fusionarCamposCC(d, d, nombre);
+                if(!r || r.offline || (r.ok === false && !r.masReciente)) fallos.push('sin confirmación de la nube');
+            } catch(e){ fallos.push((e && e.message) || 'error'); }
+            hechos++;
+            if(h.vivo()) h.texto('Enviando documentos a la nube (' + hechos + '/' + docs.length + ')…');
+        }
+    });
+    Promise.all(trabajadores).then(() => {
+        if(!fallos.length) h.ok(docs.length + ' documento(s) sincronizados con la nube.');
+        else h.error(fallos.length + ' de ' + docs.length + ' documento(s) quedaron solo en este equipo y se enviarán al sincronizar: ' + fallos[0]);
+    });
 }
 
 function _exportar(){
@@ -20254,9 +20316,9 @@ function _filasDesdeMatriz(matriz) {
     return { filas };
 }
 
-function _analizar(filas) {
+function _analizar(filas, nube) {
     const hoy = new Date().toISOString().slice(0, 10);
-    const docs = (CC.docs ? CC.docs() : []).filter(d => d.tipoDoc !== 'NC');
+    const docs = (nube || []).filter(d => d.tipoDoc !== 'NC');
     const porFactura = {};
     docs.forEach(d => {
         const k = _numFactura(d.factura || d.numero);
@@ -20280,7 +20342,8 @@ function _analizar(filas) {
         if (rut && _rutNorm(d.rut) !== rut) { r.estado = 'rutdif'; r.texto = 'El RUT de la descripción no coincide con el del documento (' + (d.rut || '—') + ')'; return r; }
         const saldo = (d.saldo || 0) - (acumulado[d.id] || 0);
         const ref = r.desc.slice(0, 80);
-        const dup = (d.movimientos || []).some(m => m.tipo === 'PAGO' && m.estado !== 'REVERSADO' && Math.round(m.monto) === f.monto && m.fecha === r.fecha && String(m.referencia || '') === ref);
+        if (d.historialLegible === false) { r.estado = 'invalido'; r.texto = 'El historial del documento en la nube no se pudo leer; no se puede aplicar'; return r; }
+        const dup = (d.pagosPrevios || []).some(m => Math.round(Number(m.monto)) === f.monto && m.fecha === r.fecha && String(m.referencia || '') === ref);
         if (dup) { r.estado = 'duplicado'; r.texto = 'Ya existe un pago idéntico (misma fecha, monto y descripción)'; return r; }
         if (saldo <= 0) { r.estado = 'pagada'; r.texto = 'La factura no tiene saldo pendiente'; return r; }
         acumulado[d.id] = (acumulado[d.id] || 0) + f.monto;
@@ -20365,11 +20428,16 @@ async function abrirPagoMasivoCC(host, onChange) {
         };
     };
 
-    const procesar = () => {
+    const procesar = async () => {
         const r = _filasDesdeMatriz(estado.matriz || []);
         if (r.error) { vistaCarga(); host.querySelector('#pmMsg').innerHTML = '<div class="warn">' + escH(r.error) + '</div>'; return; }
         if (!r.filas.length) { vistaCarga(); host.querySelector('#pmMsg').innerHTML = '<div class="warn">El archivo no tiene filas de datos.</div>'; return; }
-        estado.filas = _analizar(r.filas);
+        if (!__X.servidorDisponible || !__X.servidorDisponible()) { vistaCarga(); host.querySelector('#pmMsg').innerHTML = '<div class="warn">Sin conexión con la nube: las facturas se validan contra la nube, así que no se puede continuar ahora.</div>'; return; }
+        host.innerHTML = '<div class="modal open"><div class="modal-panel"><div class="modal-body"><div class="info">⏳ Buscando ' + r.filas.length + ' factura(s) en la nube…</div></div></div></div>';
+        let nube;
+        try { nube = await __X.llamar('apiBuscarFacturasCC', r.filas.map(f => f.factura).filter(Boolean)); }
+        catch (e) { vistaCarga(); host.querySelector('#pmMsg').innerHTML = '<div class="warn">No fue posible consultar la nube: ' + escH((e && e.message) || String(e)) + '</div>'; return; }
+        estado.filas = _analizar(r.filas, nube || []);
         vistaPrevia();
     };
 
@@ -20451,42 +20519,47 @@ async function abrirPagoMasivoCC(host, onChange) {
         const nombreU = autorizador.nombre;
         const extra = sesion && sesion.id !== autorizador.id ? ' (sesión de ' + sesion.nombre + ')' : '';
         const lote = 'LOTE-' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
-        await CC.cargar();
         const resultados = [];
-        const tocados = [];
-        seleccion.forEach(f => {
-            const d = (CC.docs ? CC.docs() : []).find(x => x.id === f.doc.id);
-            if (!d) { resultados.push({ f, ok: false, texto: 'El documento ya no existe' }); return; }
-            const ref = f.desc.slice(0, 80);
-            const yaEsta = (d.movimientos || []).some(m => m.tipo === 'PAGO' && m.estado !== 'REVERSADO' && Math.round(m.monto) === f.monto && m.fecha === f.fecha && String(m.referencia || '') === ref);
-            if (yaEsta && f.estado !== 'duplicado') { resultados.push({ f, ok: false, texto: 'Omitido: ya estaba registrado' }); return; }
-            const ahora = new Date().toISOString();
-            d.movimientos = d.movimientos || [];
-            d.movimientos.push({
-                id: 'pago-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8), documentoId: d.id, rut: d.rut, tipo: 'PAGO', subtipo: 'Transferencia',
-                monto: f.monto, fecha: f.fecha, usuario: nombreU, referencia: ref, documentoOrigenId: null, documentoDestinoId: d.id,
-                observacion: 'Pago masivo ' + lote + ' · archivo ' + estado.archivo, estado: 'REGISTRADO', creadoEn: ahora, actualizadoEn: ahora
+        const h = __X.actividad ? __X.actividad.iniciar('Aplicando ' + seleccion.length + ' pago(s) en la nube…') : null;
+        const TAM = 20;
+        for (let i = 0; i < seleccion.length; i += TAM) {
+            const grupo = seleccion.slice(i, i + TAM);
+            const carga = grupo.map((f, j) => ({
+                clave: i + j, id: f.doc.id, monto: f.monto, fecha: f.fecha, referencia: f.desc.slice(0, 80),
+                rut: _rutDeTexto(f.desc), montoTexto: formatCLP(f.monto) + '',
+                forzar: ['sobrepago', 'pagada', 'rutdif'].indexOf(f.estado) !== -1, permitirDuplicado: f.estado === 'duplicado'
+            }));
+            let resp = null, falla = '';
+            try { resp = await __X.llamar('apiAplicarPagosCC', carga, nombreU + extra, lote, estado.archivo); }
+            catch (e) { falla = (e && e.message) || String(e); }
+            grupo.forEach((f, j) => {
+                const r = resp && resp.find(x => x.clave === i + j);
+                if (!r) { resultados.push({ f, ok: false, texto: 'Sin confirmación de la nube' + (falla ? ' (' + falla + ')' : '') + '. Repita el proceso: los pagos ya aplicados se omiten.' }); return; }
+                if (!r.ok) { resultados.push({ f, ok: false, texto: r.error || 'No se aplicó' }); return; }
+                resultados.push({ f, ok: true, texto: 'Aplicado · saldo ahora ' + formatCLP(r.saldo || 0) });
+                const local = (CC.docs ? CC.docs() : []).find(x => x.id === f.doc.id);
+                if (local) {
+                    local.movimientos = local.movimientos || [];
+                    if (!local.movimientos.some(m => m.id === r.movimiento.id)) local.movimientos.push(r.movimiento);
+                    local.bitacora = local.bitacora || [];
+                    local.bitacora.push(r.bitacora);
+                    local.pagos = r.pagos;
+                    local.actualizado = r.actualizado;
+                    local._pendienteSync = false;
+                    CC.recalcularDocCC(local);
+                }
             });
-            d.pagos = (d.pagos || 0) + f.monto;
-            (d.bitacora = d.bitacora || []).push({ fecha: f.fecha, texto: 'Pago masivo: ' + formatCLP(f.monto) + ' (Transferencia · ' + ref + ') aplicado por ' + nombreU + extra + ' · ' + lote + ' · archivo ' + estado.archivo });
-            (__X.recalcularSaldoDocumento || __X.recalcularDocCC)(d);
-            tocados.push(d);
-            resultados.push({ f, ok: true, texto: 'Aplicado · saldo ahora ' + formatCLP(d.saldo || 0) });
-        });
-        CC.guardar();
-        let sinSync = 0;
-        for (const d of tocados) {
-            if (!__X.fusionarCamposCC) break;
-            const r = await __X.fusionarCamposCC(d, d, nombreU).catch(e => ({ ok: false, error: e && e.message }));
-            if (!r || r.offline || r.ok === false) sinSync++;
         }
+        CC.guardar();
+        const sinSync = resultados.filter(r => !r.ok).length;
+        if (h) { if (sinSync) h.error(sinSync + ' de ' + resultados.length + ' pago(s) no se aplicaron; revise el detalle.'); else h.ok(resultados.length + ' pago(s) aplicados en la nube.'); }
         if (onChange) onChange();
         const aplicados = resultados.filter(r => r.ok).length;
         host.innerHTML = `
         <div class="modal open"><div class="modal-panel modal-panel-xl">
             <div class="modal-header"><h3>💵 Pago masivo · resultado</h3><button class="modal-close" id="pmX">✕</button></div>
             <div class="modal-body">
-                <div class="${aplicados ? 'info' : 'warn'}"><b>${aplicados}</b> de ${resultados.length} pago(s) aplicados por <b>${escH(nombreU)}</b> · ${escH(lote)}${sinSync ? ` · ⚠ ${sinSync} pendiente(s) de sincronizar con la nube (se reintentará al sincronizar)` : ' · sincronizado'}.</div>
+                <div class="${aplicados ? 'info' : 'warn'}"><b>${aplicados}</b> de ${resultados.length} pago(s) aplicados por <b>${escH(nombreU)}</b> · ${escH(lote)}${sinSync ? ` · ⚠ ${sinSync} no se aplicaron (detalle abajo)` : ' · confirmados por la nube'}.</div>
                 <div class="table-wrap" style="max-height:340px;overflow:auto;margin-top:8px;"><table>
                     <thead><tr><th>Factura</th><th style="text-align:right;">Abono</th><th>Resultado</th></tr></thead>
                     <tbody>${resultados.map(r => `<tr><td><b>${escH(r.f.facturaTxt)}</b></td><td style="text-align:right;">${formatCLP(r.f.monto)}</td><td style="color:${r.ok ? '#1b7a3d' : '#b3261e'};">${r.ok ? '✅' : '❌'} ${escH(r.texto)}</td></tr>`).join('')}</tbody>
@@ -26978,7 +27051,7 @@ async function _diagSubirLocal(cat) {
         const local = await store.lista(def.claveLocal);
         if (def.tipo === 'sensible') {
             const u = getUsuarioActual();
-            for (const r of local) { await llamar('apiFusionarRegistroSensible', def.modulo, r.id, r, r.actualizado, u ? u.nombre : ''); }
+            for (const r of local) { await llamar('apiFusionarRegistroSensible', def.modulo, r.id, (def.modulo === 'cuentasCorrientes' && __X.serializarCC) ? __X.serializarCC(r) : r, r.actualizado, u ? u.nombre : ''); }
         } else if (def.tipo === 'resto') {
             await llamar('apiGuardarColeccion', COLECCIONES_RESTO[def.clave].claveNube, local);
         } else {
@@ -27555,6 +27628,677 @@ window.addEventListener('error', function (ev) {
 window.__FIN=(window.__FIN||[]);window.__FIN.push("10_admin_app");</script>
 
 
+
+<script>window.__INICIO=(window.__INICIO||[]);window.__INICIO.push("11_asistente");
+(function(){
+'use strict';
+const { escH, escAttr, toast, store } = __X;
+
+const KEY_APREN = 'asistente_aprendido';
+const KEY_POP = 'rdm_asis_pop';
+const LOGO_DEFECTO = '<svg width="30" height="30" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4c-5.5 0-9.5 3.7-9.5 8.4 0 2.4 1 4.4 2.7 5.9.6.5.8 1.2.8 2V22c0 .6.4 1 1 1h10c.6 0 1-.4 1-1v-1.7c0-.8.2-1.5.8-2 1.7-1.5 2.7-3.5 2.7-5.9C25.5 7.7 21.5 4 16 4Z"/><path d="M12.5 26h7M14 29h4"/><path d="M16 9v6M13 12h6" stroke-width="1.6"/></svg>';
+
+let _est = { cargado: false, tieneApiKey: false, iaActiva: false, nombre: 'Asistente Gestor', logo: '', porRevisar: 0, usadasHoy: 0, tope: 0 };
+let _aprendido = [];
+let _hist = [];
+let _ult = null;
+let _modo = '';
+let _pendiente = '';
+let _raiz = null;
+
+const STOP = ['el','la','los','las','un','una','unos','unas','de','del','al','a','en','y','o','que','cual','cuales','cuanto','cuando','donde','como','es','son','esta','estan','se','me','mi','por','para','con','sin','su','sus','lo','le','hay','tiene','quiero','necesito','puedo','hacer','favor','porfa','hola','dime','saber'];
+
+function sinAcentos(s) { return String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, ''); }
+function norm(s) { return sinAcentos(s).toLowerCase().replace(/[^a-z0-9ñ\-\/ ]/g, ' ').replace(/\s+/g, ' ').trim(); }
+function palabras(s) { return norm(s).split(' ').filter(function (w) { return w.length >= 2 && STOP.indexOf(w) === -1; }); }
+function puede(p) { return !p || __X.tienePermisoGranular(__X.getRolActual(), p); }
+function esAdmin() { return puede('admin:configurar_cloud'); }
+function autenticado() { return typeof __X.isAutenticado === 'function' ? __X.isAutenticado() : !!__X.getUsuarioActual(); }
+
+function E(id, g, o, t, k, r, ir, p) { return { id: id, g: g, o: o, t: t, k: k, r: r, ir: ir || null, p: p || null }; }
+
+const BASE = [
+E('panel', 'control', ['dashboard|', 'centro|'], 'Panel principal y Centro de Operaciones', ['panel', 'inicio', 'centro de operaciones', 'buscar', 'buscador', 'universal'],
+  'El <b>Panel principal</b> es el punto de partida y muestra los accesos según tu rol. El <b>Centro de Operaciones</b> es un buscador único: escribe un N° de caso, pedido, factura, OT, serie, SKU, cliente o RUT y encuentra el registro en todos los módulos conectados; al elegir un resultado te lleva a su pantalla.', ['Ir al Centro de Operaciones', 'centro', null]),
+E('areas', 'control', ['area|comercial', 'area|operaciones', 'area|finanzas', 'area|postventa', 'logistica|dashboard'], 'Resúmenes por área', ['resumen', 'resumen comercial', 'resumen finanzas', 'resumen operaciones', 'indicadores', 'kpi'],
+  'Cada resumen (Comercial, Operaciones, Finanzas, Post Venta y el Resumen Logística) reúne los indicadores y detalles del área: composición de cartera, pedidos por etapa, incidencias por tipo, casos de post venta y documentos vencidos. Se calculan con los datos cargados en cada módulo.', ['Ir a Resumen Finanzas', 'area', 'finanzas'], 'finanzas:ver'),
+E('reportes', 'control', ['reportes|ejecutivo', 'reportes|cliente', 'reportes|despachos', 'reportes|antiguedad'], 'Reportes e informes', ['reporte', 'informe', 'ejecutivo mensual', 'estado de cuenta', 'antiguedad de saldos', 'despachos', 'imprimir', 'pdf'],
+  'En Control de Gestión están: <b>Ejecutivo Mensual</b> (informe para dirección), <b>Estado de Cuenta</b> por cliente, <b>Informe de Despachos</b> y <b>Antigüedad de Saldos</b>. Todos se pueden imprimir o guardar como PDF desde la pantalla del informe.', ['Ir a Ejecutivo Mensual', 'reportes', 'ejecutivo'], 'reportes:ejecutivo'),
+
+E('lic', 'comercial', ['comercial|licitaciones'], 'Licitaciones', ['licitacion', 'licitaciones', 'mercado publico', 'compra agil', 'postular', 'propuesta'],
+  'En <b>Licitaciones</b> registras los datos de la licitación (ID, RUT del organismo, monto adjudicado) y evalúas la operación antes de postular: el sistema calcula costos, margen y riesgo con los parámetros de Administración → Parám. Riesgo.', ['Ir a Licitaciones', 'comercial', 'licitaciones'], 'comercial:licitaciones'),
+E('nv', 'comercial', ['comercial|notaventa'], 'Notas de Venta', ['nota de venta', 'notas de venta', 'nv', 'orden de compra', 'oc'],
+  'En <b>Notas de Venta</b> armas el documento con encabezado, detalle de productos y totales, y lo guardas en el historial de notas de venta del cliente para consultarlo o reimprimirlo.', ['Ir a Notas de Venta', 'comercial', 'notaventa'], 'comercial:notaventa'),
+E('riesgo', 'comercial', ['comercial|riesgo', 'comercial|paramriesgo'], 'Riesgo de una operación', ['riesgo', 'margen', 'multa', 'sobrecosto', 'costo oportunidad', 'precio ajustado', 'parametros de riesgo'],
+  'El módulo <b>Riesgo</b> compara el precio con el costo real: suma al costo neto el <b>riesgo</b> (costo de oportunidad por días de pago sobre 30 + multa esperada por retraso de entrega, que se limita a 20 días + sobrecosto) y entrega el <b>margen neto</b> y un <b>precio ajustado sugerido</b>. Las tasas y topes se configuran en Administración → Parám. Riesgo.', ['Ir a Riesgo', 'comercial', 'riesgo'], 'comercial:riesgo'),
+E('cartera', 'comercial', ['comercial|cartera'], 'Cartera A/B/C/D', ['cartera', 'clase a', 'clase d', 'clasificacion', 'morosidad', 'tramos'],
+  'La <b>Cartera A/B/C/D</b> clasifica a los clientes según tramos de morosidad y tramos por monto adeudado. La clase <b>A</b> es la de menor riesgo y la <b>D</b> la de mayor riesgo; sirve para priorizar la gestión de cobranza.', ['Ir a Cartera', 'comercial', 'cartera'], 'comercial:riesgo'),
+E('historial', 'comercial', ['comercial|historial', 'comercial|seguimiento', 'logistica|seguimiento', 'cobranza|seguimiento', 'finanzas|clientes'], 'Historial del cliente y seguimiento', ['historial cliente', 'seguimiento', 'linea de tiempo', 'timeline', 'clientes', 'ficha cliente'],
+  'El <b>Historial Cliente</b> unifica en una sola pantalla lo que ocurrió con un cliente (ventas, facturas, gestiones). <b>Seguimiento</b> muestra la línea de tiempo de cada proceso por etapas. Los datos maestros de clientes (contactos, dirección) se editan en <b>Clientes</b>.', ['Ir a Historial Cliente', 'comercial', 'historial'], 'comercial:ver_historial_cliente'),
+
+E('pedidos', 'operaciones', ['logistica|pedidos'], 'Pedidos', ['pedido', 'pedidos', 'shopify', 'web', 'retiro', 'despacho', 'importar pedidos', 'estado del pedido'],
+  'En <b>Pedidos</b> se registran los pedidos (de Shopify, Mercado Público o manuales) como <b>despacho</b> o <b>retiro</b>, con su estado y la etapa en que van. Puedes crearlos a mano o importarlos desde Excel (columnas «N° Pedido», «Cliente», «Email»). Al asignar un pedido a una OT en Packing, su etapa avanza sola.', ['Ir a Pedidos', 'logistica', 'pedidos'], 'pedidos:ver'),
+E('plazos', 'operaciones', ['logistica|plazos'], 'Plazos de entrega', ['plazo', 'plazos', 'vencer', 'atrasado', 'alerta', 'multa potencial', 'tiempos promedio'],
+  '<b>Plazos</b> controla las fechas de entrega comprometidas: muestra los pedidos <b>próximos a vencer (3 días o menos)</b> y los atrasados, la multa potencial y los tiempos promedio por tramo. Puedes definir los correos que reciben las alertas de vencimiento.', ['Ir a Plazos', 'logistica', 'plazos'], 'logistica:ver_plazos'),
+E('packing', 'operaciones', ['logistica|packing'], 'Packing y órdenes de transporte', ['packing', 'bulto', 'bultos', 'ot', 'orden de transporte', 'voucher', 'mandante', 'gastos asociados', 'despachos'],
+  'En <b>Packing / Despachos</b> armas los <b>bultos</b>, los asocias a una <b>Orden de Transporte (OT)</b> y registras los documentos mandantes y los gastos asociados. Cada bulto tiene su detalle de productos y su voucher. Si trabajas con el Satélite móvil, sus órdenes se importan desde aquí.', ['Ir a Packing', 'logistica', 'packing'], 'packing:ver'),
+E('rotulado', 'operaciones', ['logistica|rotulado'], 'Rotulado y etiquetas', ['rotulado', 'etiqueta', 'etiquetas', 'formato', 'codigo de barras', 'imprimir etiqueta', 'rotulado rapido'],
+  '<b>Rotulado</b> imprime las etiquetas: usa <b>formatos</b> que tú diseñas (tamaño, campos, código de barras), permite <b>Rotulado rápido</b> con numeración 1/N … N/N, etiquetas de <b>texto libre</b> y reportes de bultos. Los formatos se guardan y se pueden editar.', ['Ir a Rotulado', 'logistica', 'rotulado'], 'rotulado:ver'),
+E('incidencias', 'operaciones', ['logistica|incidencias'], 'Incidencias de despacho', ['incidencia', 'incidencias', 'reclamo', 'danado', 'perdido', 'error de despacho'],
+  'En <b>Incidencias</b> registras problemas de despacho asociados a un bulto (el sistema muestra las incidencias previas de ese bulto) y obtienes el reporte por tipo.', ['Ir a Incidencias', 'logistica', 'incidencias'], 'logistica:ver_incidencias'),
+E('cotizador', 'operaciones', ['logistica|cotizador'], 'Cotizador de envíos: cómo calcula', ['cotizador', 'cotizar', 'cotizacion', 'tarifa', 'flete', 'peso volumetrico', 'cuanto cuesta enviar', 'zona', 'operador', 'courier', 'comunas'],
+  'El <b>Cotizador</b> estima el costo de enviar un pedido por cada operador:<br>1. Toma los productos (peso y medidas del catálogo o del diccionario por familia/subfamilia) y arma el bulto con un <b>margen de empaque</b> (por defecto 15%).<br>2. Calcula el <b>peso cobrable</b>: el mayor entre el peso real y el <b>volumétrico</b> (alto × ancho × largo ÷ 4000), con un mínimo por bulto (0,5 kg por defecto).<br>3. Según la <b>zona de destino</b> (comuna) aplica la tarifa base y los <b>tramos de precio por kg</b> del operador, más recargos y plazos; el seguro es 1% del valor por defecto.<br>Si un operador no tiene tarifa cargada, se muestra un enlace directo a su sitio. Los parámetros, zonas, comunas y operadores se editan en la misma pantalla (permiso «configurar»).', ['Abrir el Cotizador', 'logistica', 'cotizador'], 'cotizador:ver'),
+E('cotizador2', 'operaciones', ['logistica|cotizador'], 'Cotizador: ajustar medidas y órdenes de transporte', ['ajuste manual', 'dimensiones', 'medidas del producto', 'diccionario', 'override', 'orden de transporte', 'importar comunas'],
+  'Si las medidas estimadas de un producto no son correctas, puedes dejar un <b>ajuste manual</b> (peso y dimensiones) que el cotizador usa desde ese momento con confianza 100%. El orden de prioridad es: ajuste manual → subfamilia → familia → reglas por descripción → estimación genérica. Las comunas se pueden importar desde Excel y desde el cotizador se crean las <b>Órdenes de Transporte</b> con sus documentos mandantes y gastos.', ['Abrir el Cotizador', 'logistica', 'cotizador'], 'cotizador:ver'),
+E('catalogo', 'operaciones', ['logistica|catalogo'], 'Catálogo y ubicaciones', ['catalogo', 'producto', 'ubicacion', 'stock', 'reservado', 'sku', 'codigo', 'imagen', 'ubicar'],
+  'El <b>Catálogo</b> lista los productos con código, descripción, familia, ubicación y stock reservado. Puedes crear productos, editarlos, ver imágenes y <b>asignar una ubicación a todos los productos que ingresaron juntos</b> buscándolos por su número de ingreso.', ['Ir al Catálogo', 'logistica', 'catalogo'], 'logistica:ver'),
+E('asociar', 'operaciones', ['logistica|asociar', 'logistica|escanear'], 'Asociar y escanear códigos de barras', ['asociar', 'escanear', 'camara', 'codigo de barras', 'barcode', 'lector', 'sin codigo'],
+  '<b>Asociar</b> vincula el código de barras físico con el código del sistema de los productos que aún no lo tienen. <b>Escanear</b> busca un producto leyendo el código con la cámara o un lector.', ['Ir a Asociar', 'logistica', 'asociar'], 'logistica:ver'),
+E('inventario', 'operaciones', ['logistica|inventario'], 'Conteo de inventario', ['inventario', 'conteo', 'diferencias', 'toma de inventario'],
+  'En <b>Inventario</b> registras el conteo físico y el sistema genera el <b>reporte de diferencias</b> contra el stock del catálogo.', ['Ir a Inventario', 'logistica', 'inventario'], 'logistica:ver'),
+
+E('cc', 'finanzas', ['finanzas|'], 'Cuentas Corrientes: qué muestra y cómo se calcula', ['cuentas corrientes', 'cuenta corriente', 'cc', 'saldo', 'cartera', 'factura', 'vencida', 'vigente', 'estado de la factura', 'como se calcula el saldo'],
+  '<b>Cuentas Corrientes</b> es la cartera de facturas por cliente. El <b>saldo</b> de cada documento es <b>monto + ajuste − nota de crédito − pagos</b> (nunca negativo). El estado es automático: <b>Pagada</b> si no queda saldo, <b>Vencida</b> si pasó el plazo (30 días por defecto desde la emisión) y <b>Vigente</b> en los demás casos. Cada documento tiene su bitácora de gestiones y su historial de movimientos.', ['Ir a Cuentas Corrientes', 'finanzas', null], 'finanzas:ver'),
+E('ccimp', 'finanzas', ['finanzas|'], 'Importar facturas desde Excel', ['importar', 'importacion', 'excel', 'cta cte', 'cargar facturas', 'duplicados', 'pegar'],
+  'Para cargar facturas usa <b>Importar Excel</b> (hoja «CTA CTE» con cabecera NUMERO/FACTURA, RUT, NOMBRE, FECHA, MONTO, PAGO, SALDO…) o <b>Pegar filas</b>. El sistema primero consulta la nube y compara cada fila por <b>número + RUT + monto</b>: las nuevas se crean y las existentes se actualizan sin duplicarlas. Al terminar envía solo los documentos tocados a la nube y te informa cuántos quedaron sin sincronizar.', ['Ir a Cuentas Corrientes', 'finanzas', null], 'finanzas:ver'),
+E('pagomasivo', 'finanzas', ['finanzas|'], 'Pago masivo de facturas', ['pago masivo', 'abonos', 'aplicar pagos', 'cartola', 'transferencias', 'pagar facturas', 'registrar pago'],
+  'El <b>Pago masivo</b> aplica varios abonos de una sola vez:<br>1. Carga un Excel o pega las columnas <b>Fecha · Descripción · Revisar · Abonos · Factura</b>.<br>2. El sistema busca cada factura <b>en la nube</b> y valida RUT, saldo, duplicados y documentos eliminados; te muestra la vista previa con ✅ cancela, 🟡 parcial y ⚠️/❌ por revisar.<br>3. Un usuario con permiso «registrar pago» se autoriza con su contraseña y aplica.<br>Solo se escriben los datos del pago (pagos, saldo, movimiento y una línea de bitácora): el resto del documento y su bitácora anterior no se tocan.', ['Ir a Cuentas Corrientes', 'finanzas', null], 'finanzas:registrar_pago'),
+E('ccnc', 'finanzas', ['finanzas|'], 'Notas de crédito, multas y refacturación', ['nota de credito', 'nc', 'multa', 'refacturada', 'ajuste de precio', 'aplicar nc'],
+  'Las <b>notas de crédito</b> se aplican a la factura de origen y rebajan su saldo; las <b>multas</b> y el <b>ajuste de precio</b> se registran en el documento. Cada aplicación queda en el historial de movimientos del documento.', ['Ir a Cuentas Corrientes', 'finanzas', null], 'finanzas:ver'),
+E('traspaso', 'finanzas', ['finanzas|', 'cobranza|facturas'], 'Traspaso de Finanzas a Cobranza', ['traspaso', 'derivar a cobranza', 'asignar a cobranza', 'candidatos', 'vencidos'],
+  'Los documentos <b>vencidos con saldo pendiente</b> y sin asignación se pueden traspasar a <b>Cobranza</b>. Al traspasar queda registrado quién y cuándo lo hizo, y el documento aparece en la cartera de Cobranza.', ['Ir a Cobranza', 'cobranza', 'facturas'], 'cobranza:gestionar'),
+E('cobranza', 'finanzas', ['cobranza|facturas'], 'Cobranza: gestión de la cartera', ['cobranza', 'gestionar', 'correo de cobranza', 'requerimiento', 'interes', 'intereses', 'cmf', 'un solo cliente', 'rut unico'],
+  '<b>Cobranza</b> trabaja un cliente (RUT) a la vez. Calcula los <b>intereses</b> con la tasa CMF vigente, envía <b>correos de requerimiento de seis niveles</b> que escalan en firmeza y registra cada gestión en la bitácora del documento. Las plantillas de correo y las tasas se administran en Administración → Plantillas y Tasas CMF.', ['Ir a Cobranza', 'cobranza', 'facturas'], 'cobranza:gestionar'),
+E('plan', 'finanzas', ['cobranza|plan'], 'Plan de Recuperación', ['plan de recuperacion', 'plan', 'segmento', 'proxima accion', 'responsable', 'contactos'],
+  'El <b>Plan de Recuperación</b> asigna a cada documento un segmento, próxima acción, responsable, fecha y estado, y guarda los contactos del cliente. «Limpiar planes» restablece el plan sin tocar la bitácora de gestiones.', ['Ir al Plan', 'cobranza', 'plan'], 'cobranza:gestionar'),
+E('legal', 'finanzas', ['cobranza|documentos'], 'Documentos legales (Legal)', ['legal', 'documento legal', 'carta', 'notificacion', 'ley 19.983', 'plantilla legal', 'generar documento'],
+  'En <b>Legal</b> generas los documentos de cobranza a partir de las plantillas con los datos del acreedor (Administración → Acreedores), el deudor y las facturas seleccionadas. Antes de generar, el sistema verifica los datos obligatorios; puedes incorporar la bitácora como antecedente. Los textos legales de las plantillas no se modifican desde aquí.', ['Ir a Legal', 'cobranza', 'documentos'], 'cobranza:documentos'),
+E('descargos', 'finanzas', ['cobranza|descargos'], 'Descargos', ['descargo', 'descargos', 'multa', 'organismo deudor', 'acreedor', 'situacion de la factura', 'causales'],
+  'En <b>Descargos</b> eliges el <b>acreedor</b> (el predeterminado de Configuración) y marcas las facturas: el organismo deudor, su RUT y dirección se completan desde los documentos y la ficha del cliente. Si faltan datos obligatorios (acreedor, RUT, ciudad, organismo) el sistema te avisa antes de generar; no crea documentos incompletos.', ['Ir a Descargos', 'cobranza', 'descargos'], 'cobranza:documentos'),
+E('facturacion', 'finanzas', ['facturacion|'], 'Facturación', ['facturacion', 'facturar', 'despacho y post venta', 'documentos asignados'],
+  '<b>Facturación</b> muestra los documentos asignados a Facturación, Despacho y Post Venta para gestionar su emisión y seguimiento.', ['Ir a Facturación', 'facturacion', null], 'facturacion:ver'),
+
+E('pvflujo', 'postventa', ['postventa|casos', 'postventa|nuevo', 'postventa|dashboard'], 'Flujo de un caso de Post Venta', ['caso', 'casos', 'post venta', 'postventa', 'estados', 'flujo', 'garantia', 'nuevo caso', 'que sigue', 'siguiente paso'],
+  'Un caso nace como <b>Nuevo / Recepcionado</b> y avanza por: <b>Servicio Técnico</b> → (reparado / Stock RMA → <b>RMA</b> → Enviado a proveedor → Retornado) → Devolución a venta, Entrega a cliente o Retornado a tienda → <b>Resuelto · Espera cliente</b> → <b>Cerrado</b>; en cualquier punto puede quedar <b>Rechazado</b> con su fundamento legal. El sistema solo permite las transiciones válidas y en cada estado sugiere la acción pendiente. Tipos de solicitud: Garantía, Cambio, Devolución, Reparación y Consulta técnica.', ['Ir a Casos', 'postventa', 'casos'], 'postventa:ver'),
+E('pvsstt', 'postventa', ['postventa|sstt'], 'Servicio Técnico (SSTT)', ['sstt', 'servicio tecnico', 'diagnostico', 'orden de servicio', 'reparar', 'sla', 'tecnico'],
+  'En <b>Serv. Técnico</b> se registra el diagnóstico y se decide: reparar, enviar a RMA o rechazar la garantía. El plazo de atención (SLA) del servicio técnico es de <b>72 horas</b> y el caso muestra cuánto va transcurrido. Se emite la <b>Orden de Servicio</b> y el comprobante de recepción.', ['Ir a Serv. Técnico', 'postventa', 'sstt'], 'postventa:sstt'),
+E('pvrma', 'postventa', ['postventa|gestion_rma', 'postventa|proveedores'], 'RMA, garantías y proveedores', ['rma', 'garantia proveedor', 'proveedor', 'stock bodega 05', 'compras', 'nota de credito proveedor', 'base de compras', 'importar compras'],
+  '<b>Gestión RMA</b> carga un Excel (.xlsx/.xlsm) con las hojas Compras, PostVenta y NC, cruza el stock de la <b>Bodega 05</b> (post venta, parte de la bodega central) con el historial de compras y permite ingresar los datos técnicos. Verifica la garantía contra el proveedor, y desde ahí se deriva el producto a Servicio Técnico, Casos o a la <b>solicitud RMA</b> con el proveedor (guía de despacho, número RMA, retorno y costo asumido). Los proveedores se mantienen en <b>Proveedores</b>.', ['Ir a Gestión RMA', 'postventa', 'gestion_rma'], 'postventa:gestion_rma'),
+E('pvdocs', 'postventa', ['postventa|casos'], 'Documentos de Post Venta', ['comprobante de recepcion', 'resolucion de garantia', 'solicitud de devolucion', 'documento post venta', 'rechazo', 'fundamento legal'],
+  'Desde el caso se emiten el <b>comprobante de recepción</b>, la <b>resolución de solicitud de garantía</b> y la <b>solicitud de autorización de devolución (RMA)</b>. Si se rechaza una garantía, el sistema propone el <b>fundamento legal</b> del rechazo para revisarlo antes de enviar el correo al cliente.', ['Ir a Casos', 'postventa', 'casos'], 'postventa:ver'),
+
+E('sync', 'administracion', ['admin|datos'], 'Sincronización con la nube', ['sincronizar', 'sincronizacion', 'nube', 'ciclo', 'no veo datos', 'pendiente', 'sin conexion', 'error de sincronizacion', 'respaldo'],
+  'La <b>nube es la fuente de verdad</b>: cada equipo lee de ella y solo envía lo que está editando. El indicador de la cabecera muestra el estado; <b>Sincronizar ahora</b> envía únicamente lo que quedó pendiente en este equipo. El <b>respaldo completo</b> (subir todo) solo se hace de forma voluntaria desde Administración → Datos Maestros. Si un equipo no ve datos, revisa la conexión y el último error en Datos Maestros → Sincronización.', ['Ir a Datos Maestros', 'admin', 'datos'], 'admin:configurar_cloud'),
+E('enlace', 'administracion', ['admin|datos'], 'Enlace para colaboradores y acceso de administrador', ['enlace', 'colaborador', 'colaboradores', 'clave maestra', 'acceso', 'conectar equipo', 'github', 'admin'],
+  'En <b>Datos Maestros → Enlace para colaboradores</b> se genera un solo enlace para el equipo: quien lo abre queda conectado sin escribir clave. Si lo generas de nuevo, el anterior deja de funcionar. Para entrar como administrador desde el sitio publicado, usa el botón <b>Enlace de administrador</b> (se genera abriendo el ERP por el enlace del script). Nunca compartas la clave maestra.', ['Ir a Datos Maestros', 'admin', 'datos'], 'admin:configurar_cloud'),
+E('usuarios', 'administracion', ['admin|usuarios', 'admin|roles', 'admin|permisos'], 'Usuarios, roles y permisos', ['usuario', 'usuarios', 'rol', 'roles', 'permiso', 'permisos', 'contrasena', 'clave de usuario', 'crear usuario'],
+  'En <b>Usuarios</b> creas y activas/desactivas personas; en <b>Roles</b> defines qué puede hacer cada rol y en <b>Permisos</b> ves el detalle por módulo. Los accesos que ves en el menú dependen de tu rol. Si ves un aviso de contraseña inicial, cámbiala en Administración → Usuarios.', ['Ir a Usuarios', 'admin', 'usuarios'], 'admin:gestionar_usuarios'),
+E('maestros', 'administracion', ['admin|listas', 'admin|importaciones', 'admin|tasas', 'cobranza|plantillas', 'admin|acreedores', 'admin|diagnostico'], 'Listas, tasas, plantillas, acreedores y diagnóstico', ['listas', 'tasas cmf', 'plantillas', 'acreedores', 'acreedor', 'diagnostico de datos', 'importaciones'],
+  '<b>Listas</b> mantiene los catálogos de selección; <b>Tasas CMF</b> las tasas para el cálculo de intereses; <b>Plantillas</b> los correos y documentos de cobranza; <b>Acreedores</b> los datos de la empresa acreedora (uno predeterminado) que usan los documentos legales y los descargos; <b>Importaciones</b> las cargas masivas de datos; y <b>Diagnóstico de datos</b> compara los datos locales con la nube.', ['Ir a Acreedores', 'admin', 'acreedores'], 'admin:configurar_cloud')
+];
+
+function gruposVisibles() {
+  return (__X.GRUPOS || []).map(function (g) {
+    return { id: g.id, nombre: g.nombre, icono: g.icono, ops: g.opciones.filter(function (o) { return puede(o.permiso); }) };
+  }).filter(function (g) { return g.ops.length; });
+}
+
+function todaBase() {
+  return BASE.concat(_aprendido.map(function (a) {
+    return { id: 'ap:' + a.id, g: a.grupo || '', o: [], t: a.titulo || a.pregunta, k: String(a.claves || '').split(',').map(function (x) { return x.trim(); }).filter(Boolean).concat([a.pregunta || '']), r: escH(a.respuesta || '').replace(/\n/g, '<br>'), ir: null, p: null, aprendido: true };
+  }));
+}
+
+function buscar(texto) {
+  const t = ' ' + norm(texto) + ' ';
+  const tok = palabras(texto);
+  const res = [];
+  todaBase().forEach(function (e) {
+    if (!puede(e.p)) return;
+    let s = 0;
+    e.k.forEach(function (k) {
+      const kn = norm(k);
+      if (!kn) return;
+      if (kn.indexOf(' ') >= 0) { if (t.indexOf(' ' + kn) >= 0) s += 2; }
+      else if (tok.some(function (w) { return w.indexOf(kn) === 0 || (kn.length >= 5 && kn.indexOf(w) === 0 && w.length >= 4); })) s += 1;
+    });
+    const tt = norm(e.t);
+    tok.forEach(function (w) { if (w.length >= 4 && tt.indexOf(w) >= 0) s += 1; });
+    if (s && e.aprendido) { s = s * 2; if (norm(e.k[e.k.length - 1]) === norm(texto)) s += 10; }
+    if (s) res.push({ e: e, s: s });
+  });
+  res.sort(function (a, b) { return b.s - a.s; });
+  return res;
+}
+
+function css() {
+  if (document.getElementById('rdmAsisCss')) return;
+  const st = document.createElement('style');
+  st.id = 'rdmAsisCss';
+  st.textContent = '#rdmAsis{position:fixed;right:14px;bottom:14px;z-index:9000;font-family:inherit}' +
+    '#rdmAsis .as-btn{width:56px;height:56px;border-radius:50%;border:0;background:#6b2a72;color:#fff;cursor:pointer;box-shadow:0 6px 18px rgba(0,0,0,.25);padding:0;display:flex;align-items:center;justify-content:center;position:relative;overflow:visible}' +
+    '#rdmAsis .as-btn img{width:100%;height:100%;border-radius:50%;object-fit:cover}' +
+    '#rdmAsis .as-aprende{position:absolute;top:-2px;right:-2px;min-width:18px;height:18px;border-radius:9px;background:#f59e0b;color:#fff;font-size:11px;font-weight:700;line-height:18px;text-align:center;padding:0 4px;display:none}' +
+    '#rdmAsis .as-pop{display:none;background:#fff;border:1px solid #e7e0ea;border-radius:14px;box-shadow:0 10px 26px rgba(43,18,50,.2);padding:8px 14px;margin:0 6px 10px 0;font-size:13px;position:relative;float:right}' +
+    '#rdmAsis .as-pop b{color:#6b2a72}#rdmAsis .as-pop .x{border:0;background:none;color:#5f5a63;font-size:18px;cursor:pointer;margin-left:6px}' +
+    '#rdmAsis .as-panel{display:none;position:fixed;right:14px;bottom:82px;width:390px;max-width:calc(100% - 28px);height:580px;max-height:calc(100% - 100px);background:#f4f1f5;border-radius:14px;overflow:hidden;box-shadow:0 12px 34px rgba(0,0,0,.28);flex-direction:column;text-align:left}' +
+    '#rdmAsis .as-panel.abierto{display:flex}' +
+    '#rdmAsis .as-head{background:#6b2a72;color:#fff;display:flex;align-items:center;padding:10px 12px}' +
+    '#rdmAsis .as-av{width:38px;height:38px;border-radius:50%;background:rgba(255,255,255,.18);margin-right:10px;flex:none;display:flex;align-items:center;justify-content:center;overflow:hidden}' +
+    '#rdmAsis .as-av img{width:100%;height:100%;object-fit:cover}#rdmAsis .as-av svg{width:24px;height:24px}' +
+    '#rdmAsis .as-tt{flex:1;min-width:0}#rdmAsis .as-tt b{display:block;font-size:15px}#rdmAsis .as-tt span{font-size:12px;opacity:.85}' +
+    '#rdmAsis .as-x{background:none;border:0;color:#fff;font-size:20px;cursor:pointer;line-height:1;padding:0 6px;margin-left:2px}' +
+    '#rdmAsis .as-body{padding:12px;overflow-y:auto;flex:1;-webkit-overflow-scrolling:touch}' +
+    '#rdmAsis .as-body:after{content:"";display:block;clear:both}' +
+    '#rdmAsis .as-m{max-width:88%;padding:8px 11px;margin-bottom:6px;border-radius:10px;font-size:14px;line-height:1.45;box-shadow:0 1px 1px rgba(0,0,0,.08);color:#1f2430;word-wrap:break-word;clear:both}' +
+    '#rdmAsis .as-m.bot{background:#fff;float:left;border-top-left-radius:2px}#rdmAsis .as-m.yo{background:#eadcf0;float:right;border-top-right-radius:2px}' +
+    '#rdmAsis .as-m table{width:100%;border-collapse:collapse;font-size:12px;margin-top:6px}#rdmAsis .as-m td{border-top:1px solid #e7e0ea;padding:3px 2px;vertical-align:top}' +
+    '#rdmAsis .as-m small{color:#6b6475}' +
+    '#rdmAsis .as-ops{clear:both;margin:2px 0 8px}#rdmAsis .as-ops.usado{opacity:.5;pointer-events:none}' +
+    '#rdmAsis .as-op{display:block;width:100%;text-align:left;background:#fff;border:1px solid #d9cfe0;border-radius:10px;padding:8px 12px;margin-bottom:5px;font-family:inherit;font-size:14px;cursor:pointer;color:#4a1b52;font-weight:600}' +
+    '#rdmAsis .as-op:hover{border-color:#6b2a72;background:#faf6fb}#rdmAsis .as-op.ia{background:#f1e3f3;border-color:#f1e3f3}#rdmAsis .as-op.ok{background:#1b7a3d;border-color:#1b7a3d;color:#fff}' +
+    '#rdmAsis .as-tipeo i{display:inline-block;width:7px;height:7px;margin-right:4px;border-radius:50%;background:#9a8fa3;animation:asTip 1s infinite}#rdmAsis .as-tipeo i:nth-child(2){animation-delay:.15s}#rdmAsis .as-tipeo i:nth-child(3){animation-delay:.3s}' +
+    '@keyframes asTip{0%,60%,100%{opacity:.3}30%{opacity:1}}' +
+    '#rdmAsis .as-in{display:flex;padding:8px;background:#ece7ef;border-top:1px solid #d9cfe0;margin:0}' +
+    '#rdmAsis .as-in input{flex:1;min-width:0;border:1px solid #d9cfe0;border-radius:20px;font-size:16px;padding:9px 14px;background:#fff;color:#1f2430;font-family:inherit}' +
+    '#rdmAsis .as-in input:focus{outline:none;border-color:#6b2a72}' +
+    '#rdmAsis .as-in button{width:40px;height:40px;flex:none;border-radius:50%;background:#6b2a72;border:0;color:#fff;cursor:pointer;margin-left:6px;padding:0}' +
+    '#rdmAsisAdm{position:fixed;inset:0;background:rgba(20,10,25,.55);z-index:9500;display:flex;align-items:center;justify-content:center;padding:12px}' +
+    '#rdmAsisAdm .adm{background:#fff;border-radius:12px;max-width:760px;width:100%;max-height:92vh;overflow:auto;padding:16px}' +
+    '#rdmAsisAdm h3{margin:0 0 8px;color:#4a1b52}#rdmAsisAdm .adm-tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}' +
+    '#rdmAsisAdm .adm-tabs button{border:1px solid #d9cfe0;background:#fff;border-radius:8px;padding:6px 12px;cursor:pointer;font-weight:600;color:#4a1b52}#rdmAsisAdm .adm-tabs button.on{background:#6b2a72;color:#fff;border-color:#6b2a72}' +
+    '#rdmAsisAdm .adm-c{border:1px solid #e7e0ea;border-radius:10px;padding:10px;margin-bottom:8px}#rdmAsisAdm .adm-c textarea,#rdmAsisAdm .adm-c input[type=text]{width:100%;box-sizing:border-box;margin-top:4px}' +
+    '#rdmAsisAdm .adm-f{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}' +
+    '@media print{#rdmAsis,#rdmAsisAdm{display:none!important}}';
+  document.head.appendChild(st);
+}
+
+function logoHtml(grande) {
+  return _est.logo ? '<img src="' + escAttr(_est.logo) + '" alt="">' : LOGO_DEFECTO;
+}
+
+function montar() {
+  if (_raiz) return;
+  css();
+  _raiz = document.createElement('div');
+  _raiz.id = 'rdmAsis';
+  _raiz.style.display = 'none';
+  _raiz.innerHTML = '<div class="as-panel" id="asPanel"><div class="as-head"><div class="as-av" id="asAv"></div><div class="as-tt"><b id="asNom"></b><span>Guía del ERP y análisis con IA</span></div>' +
+    '<button type="button" class="as-x" id="asAdm" title="Administrar el asistente" style="display:none">⚙</button><button type="button" class="as-x" id="asRst" title="Volver al inicio">↺</button><button type="button" class="as-x" id="asX" title="Cerrar">×</button></div>' +
+    '<div class="as-body" id="asChat"></div>' +
+    '<form class="as-in" id="asForm" autocomplete="off"><input id="asIn" type="text" maxlength="300" placeholder="Escribe tu pregunta…" autocomplete="off"><button type="submit" title="Enviar"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M3 20.5 21 12 3 3.5l.01 6.6L15 12 3.01 13.9z"/></svg></button></form></div>' +
+    '<div class="as-pop" id="asPop"><b>¿Dudas?</b> Pregúntale al asistente<button type="button" class="x" id="asPopX">×</button></div><div style="clear:both"></div>' +
+    '<button type="button" class="as-btn" id="asBtn" title="Asistente"><span id="asBtnIc"></span><span class="as-aprende" id="asBadge"></span></button>';
+  document.body.appendChild(_raiz);
+  pintarMarca();
+  _raiz.querySelector('#asBtn').addEventListener('click', alternar);
+  _raiz.querySelector('#asX').addEventListener('click', cerrar);
+  _raiz.querySelector('#asRst').addEventListener('click', inicio);
+  _raiz.querySelector('#asAdm').addEventListener('click', abrirAdmin);
+  _raiz.querySelector('#asPopX').addEventListener('click', function () { ocultarPop(true); });
+  _raiz.querySelector('#asForm').addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    const i = _raiz.querySelector('#asIn');
+    const v = i.value.trim();
+    i.value = '';
+    if (v) entrada(v);
+  });
+  _raiz.querySelector('#asChat').addEventListener('click', function (ev) {
+    const b = ev.target.closest ? ev.target.closest('.as-op') : null;
+    if (!b || b.parentNode.classList.contains('usado')) return;
+    accion(b.getAttribute('data-a'), b.textContent);
+  });
+}
+
+function pintarMarca() {
+  if (!_raiz) return;
+  _raiz.querySelector('#asBtnIc').innerHTML = logoHtml();
+  _raiz.querySelector('#asAv').innerHTML = _est.logo ? '<img src="' + escAttr(_est.logo) + '" alt="">' : LOGO_DEFECTO;
+  _raiz.querySelector('#asNom').textContent = _est.nombre || 'Asistente Gestor';
+  const bd = _raiz.querySelector('#asBadge');
+  const n = esAdmin() ? (_est.porRevisar || 0) : 0;
+  bd.style.display = n ? 'block' : 'none';
+  bd.textContent = n;
+  bd.title = n ? n + ' respuesta(s) de la IA marcadas como útiles esperan tu revisión' : '';
+  _raiz.querySelector('#asAdm').style.display = esAdmin() ? '' : 'none';
+}
+
+function alternar() { _raiz.querySelector('#asPanel').classList.contains('abierto') ? cerrar() : abrir(); }
+function abrir() {
+  ocultarPop(true);
+  _raiz.querySelector('#asPanel').classList.add('abierto');
+  if (!_raiz.querySelector('#asChat').children.length) inicio();
+  cargarEstado();
+  setTimeout(function () { const i = _raiz.querySelector('#asIn'); if (i && window.innerWidth > 700) i.focus(); }, 50);
+}
+function cerrar() { _raiz.querySelector('#asPanel').classList.remove('abierto'); }
+function ocultarPop(guardar) {
+  _raiz.querySelector('#asPop').style.display = 'none';
+  if (guardar) { try { localStorage.setItem(KEY_POP, '1'); } catch (e) {} }
+}
+
+function msj(html, quien) {
+  const c = _raiz.querySelector('#asChat');
+  const d = document.createElement('div');
+  d.className = 'as-m ' + (quien || 'bot');
+  d.innerHTML = html;
+  c.appendChild(d);
+  c.scrollTop = c.scrollHeight;
+  return d;
+}
+
+function dice(html, ops, listo) {
+  const c = _raiz.querySelector('#asChat');
+  Array.prototype.forEach.call(c.querySelectorAll('.as-ops'), function (u) { u.classList.add('usado'); });
+  const t = msj('<span class="as-tipeo"><i></i><i></i><i></i></span>', 'bot');
+  setTimeout(function () {
+    t.innerHTML = html;
+    if (ops && ops.length) {
+      const d = document.createElement('div');
+      d.className = 'as-ops';
+      d.innerHTML = ops.map(function (o) { return '<button type="button" class="as-op' + (o[2] ? ' ' + o[2] : '') + '" data-a="' + escAttr(o[1]) + '">' + escH(o[0]) + '</button>'; }).join('');
+      c.appendChild(d);
+    }
+    c.scrollTop = c.scrollHeight;
+    const tr = t.getBoundingClientRect(), cr = c.getBoundingClientRect();
+    if (tr.top < cr.top) c.scrollTop = Math.max(0, c.scrollTop - (cr.top - tr.top) - 8);
+    if (listo) listo(t);
+  }, 300);
+}
+
+const OP_MENU = ['↩ Menú inicial', 'menu'];
+
+function opsIA() { return _est.iaActiva ? [['✨ Analizar con IA', 'ia:q', 'ia']] : []; }
+
+function inicio() {
+  _modo = ''; _pendiente = '';
+  _raiz.querySelector('#asChat').innerHTML = '';
+  const gs = gruposVisibles();
+  const ops = gs.map(function (g) { return [g.icono + ' ' + g.nombre, 'g:' + g.id]; });
+  ops.push(['📚 Todos los temas', 'faq']);
+  if (_est.iaActiva) ops.push(['✨ Preguntar a la IA', 'ia:modo', 'ia']);
+  dice('¡Hola! 👋 Soy el asistente de Gestor. Elige un área del menú o escríbeme tu pregunta: te explico cómo funciona cada módulo (logística, cotizador, post venta, finanzas, cobranza…) y puedo consultar una factura, un caso, un pedido o un producto por su número.' + (_est.iaActiva ? ' Si no tengo la respuesta, puedo pedirle un análisis a la IA.' : ''), ops);
+}
+
+function mostrarGrupo(id) {
+  const g = gruposVisibles().filter(function (x) { return x.id === id; })[0];
+  if (!g) { inicio(); return; }
+  const ops = g.ops.map(function (o, i) { return [(o.icono || '') + ' ' + o.nombre, 'o:' + g.id + ':' + i]; });
+  const generales = temasDeGrupo(g.id);
+  if (generales.length) ops.push(['📖 Temas de ' + g.nombre, 'tg:' + g.id, 'ia']);
+  ops.push(OP_MENU);
+  dice('<b>' + escH(g.icono + ' ' + g.nombre) + '</b><br>Elige una opción del menú para ver cómo funciona:', ops);
+}
+
+function temasDeGrupo(gid) {
+  return todaBase().filter(function (e) { return e.g === gid && puede(e.p); });
+}
+
+function entradasDeOpcion(g, o) {
+  const clave = o.modulo + '|' + (o.sub || '');
+  return todaBase().filter(function (e) {
+    if (!puede(e.p)) return false;
+    return (e.o || []).indexOf(clave) >= 0 || (e.g === g.id && (e.o || []).indexOf(o.modulo + '|') >= 0 && !(o.sub));
+  });
+}
+
+function mostrarOpcion(gid, i) {
+  const g = gruposVisibles().filter(function (x) { return x.id === gid; })[0];
+  const o = g && g.ops[i];
+  if (!o) { inicio(); return; }
+  const lista = entradasDeOpcion(g, o);
+  if (lista.length === 1) { responder(lista[0], [o.nombre]); return; }
+  const ops = lista.map(function (e) { return [e.t, 't:' + e.id]; });
+  ops.push(['Ir a «' + o.nombre + '» →', 'ir:' + o.modulo + '|' + (o.sub || ''), 'ok']);
+  ops.push(['← ' + g.nombre, 'g:' + g.id]);
+  dice('<b>' + escH((o.icono || '') + ' ' + o.nombre) + '</b><br>' + (lista.length ? 'Elige qué quieres saber:' : 'Aún no tengo una guía escrita para esta pantalla. Puedes abrirla o preguntarme con tus palabras.'), ops.concat(lista.length ? [] : opsIA()));
+}
+
+function responder(e, extra) {
+  _ult = e;
+  const ops = [];
+  if (e.ir) ops.push([e.ir[0] + ' →', 'ir:' + e.ir[1] + '|' + (e.ir[2] || ''), 'ok']);
+  const g = (__X.GRUPOS || []).filter(function (x) { return x.id === e.g; })[0];
+  if (g) ops.push(['← ' + g.nombre, 'g:' + g.id]);
+  ops.push(['📚 Todos los temas', 'faq']);
+  ops.push(OP_MENU);
+  dice('<b>' + escH(e.t) + '</b>' + (e.aprendido ? ' <small>(respuesta validada por el administrador)</small>' : '') + '<br>' + e.r, ops);
+}
+
+function listaTemas() {
+  const gs = gruposVisibles();
+  const ops = [];
+  gs.forEach(function (g) {
+    temasDeGrupo(g.id).forEach(function (e) { ops.push([g.icono + ' ' + e.t, 't:' + e.id]); });
+  });
+  todaBase().filter(function (e) { return e.aprendido && !e.g && puede(e.p); }).forEach(function (e) { ops.push(['💡 ' + e.t, 't:' + e.id]); });
+  ops.push(OP_MENU);
+  dice('Estos son los temas que puedo explicarte:', ops);
+}
+
+function navegar(clave) {
+  const p = clave.split('|');
+  cerrar();
+  try { __X.router.navegar(p[0], p[1] || undefined); } catch (e) { toast('No se pudo abrir la pantalla', 'warn'); }
+}
+
+function accion(a, texto) {
+  if (a === 'menu') { inicio(); return; }
+  if (a === 'faq') { msj(escH(texto), 'yo'); listaTemas(); return; }
+  if (a.indexOf('g:') === 0) { msj(escH(texto), 'yo'); mostrarGrupo(a.substr(2)); return; }
+  if (a.indexOf('o:') === 0) { const p = a.split(':'); msj(escH(texto), 'yo'); mostrarOpcion(p[1], +p[2]); return; }
+  if (a.indexOf('tg:') === 0) {
+    const gid = a.substr(3);
+    msj(escH(texto), 'yo');
+    dice('Temas disponibles:', temasDeGrupo(gid).map(function (e) { return [e.t, 't:' + e.id]; }).concat([['← Volver', 'g:' + gid], OP_MENU]));
+    return;
+  }
+  if (a.indexOf('t:') === 0) { const e = todaBase().filter(function (x) { return x.id === a.substr(2); })[0]; msj(escH(texto), 'yo'); if (e) responder(e); return; }
+  if (a.indexOf('ir:') === 0) { navegar(a.substr(3)); return; }
+  if (a === 'ia:modo') { msj(escH(texto), 'yo'); _modo = 'ia'; dice('✨ Escribe tu pregunta y se la envío a la IA. Se enviarán solo tu pregunta y extractos de la guía de uso, sin RUT, correos ni teléfonos.', [OP_MENU]); return; }
+  if (a === 'ia:q') { msj(escH(texto), 'yo'); preguntarIA(_pendiente); return; }
+  if (a.indexOf('ia:s') === 0) { const s = (_ultIA && _ultIA.sugerencias && _ultIA.sugerencias[+a.substr(4)]) || ''; msj(escH(s), 'yo'); if (s) preguntarIA(s); return; }
+  if (a === 'voto:si' || a === 'voto:no') { votar(a === 'voto:si'); return; }
+}
+
+let _ultIA = null;
+
+function sanear(t) {
+  return String(t || '')
+    .replace(/\b\d{1,2}\.?\d{3}\.?\d{3}\s*-\s*[\dkK]\b/g, '[rut]')
+    .replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, '[correo]')
+    .replace(/\+?\d[\d\s]{8,}\d/g, '[número]');
+}
+
+function contextoIA(preg) {
+  const res = buscar(preg).slice(0, 6);
+  const base = res.length ? res.map(function (r) { return r.e; }) : BASE.slice(0, 0);
+  const mapa = gruposVisibles().map(function (g) { return g.nombre + ': ' + g.ops.map(function (o) { return o.nombre; }).join(', '); }).join('\n');
+  const guia = base.map(function (e) { return '### ' + e.t + '\n' + String(e.r).replace(/<br>/g, '\n').replace(/<[^>]+>/g, ''); }).join('\n\n');
+  return 'MAPA DEL MENÚ (visible para este usuario):\n' + mapa + (guia ? '\n\nFRAGMENTOS DE LA GUÍA DE USO:\n' + guia : '\n\n(No hay fragmentos de la guía que coincidan con la pregunta.)');
+}
+
+async function preguntarIA(q) {
+  q = sanear(String(q || '').trim());
+  if (!q) { _modo = 'ia'; dice('✨ Escribe tu pregunta para la IA.', [OP_MENU]); return; }
+  if (!_est.iaActiva) { dice('El análisis con IA no está habilitado. El administrador puede activarlo en ⚙ del asistente (requiere la clave de Gemini en el servidor).', [OP_MENU]); return; }
+  const u = __X.getUsuarioActual();
+  const ctx = __X.contextoDe ? __X.contextoDe((location.hash.replace(/^#\/?/, '').split('/')[0]) || '', (location.hash.replace(/^#\/?/, '').split('/')[1]) || '') : { titulo: '', detalle: '' };
+  const modulo = ((ctx.titulo || '') + (ctx.detalle ? ' · ' + ctx.detalle : '')).trim();
+  const t = msj('<span class="as-tipeo"><i></i><i></i><i></i></span> ✨ Consultando a la IA…', 'bot');
+  try {
+    const r = await __X.llamar('apiAsistenteIA', { pregunta: q, contexto: contextoIA(q), historial: _hist.slice(-6), usuario: u ? u.nombre : '', rol: __X.getRolActual() || '', modulo: modulo, grupo: '' });
+    _hist.push({ rol: 'u', texto: q }); _hist.push({ rol: 'b', texto: r.respuesta }); _hist = _hist.slice(-12);
+    _ultIA = r;
+    t.parentNode.removeChild(t);
+    const ops = [['👍 Me sirvió', 'voto:si', 'ok'], ['👎 No me sirvió', 'voto:no']];
+    (r.sugerencias || []).forEach(function (s, i) { ops.push(['✨ ' + s, 'ia:s' + i, 'ia']); });
+    ops.push(OP_MENU);
+    dice('✨ ' + escH(r.respuesta).replace(/\n/g, '<br>') + '<br><small>Respuesta generada por IA a partir de la guía de uso: verifica los datos importantes. Consultas hoy: ' + r.usadasHoy + ' de ' + r.tope + '.</small>', ops);
+    _modo = '';
+  } catch (e) {
+    t.parentNode.removeChild(t);
+    dice('No se pudo consultar a la IA: ' + escH((e && e.message) || String(e)), [['✨ Reintentar', 'ia:q', 'ia'], OP_MENU]);
+  }
+}
+
+async function votar(util) {
+  if (!_ultIA || !_ultIA.id) { return; }
+  try { await __X.llamar('apiAsistenteVotar', _ultIA.id, util); } catch (e) {}
+  dice(util ? '¡Gracias! Dejé tu valoración: si el administrador la aprueba, esta respuesta pasará a la guía y la podré dar sin usar IA.' : 'Gracias por avisar. Dejé registrada tu valoración para mejorar la guía.', [OP_MENU]);
+  _ultIA = null;
+}
+
+function registrarSinRespuesta(q, resultado) {
+  try {
+    const u = __X.getUsuarioActual();
+    __X.llamar('apiAsistenteSinRespuesta', sanear(q), u ? u.nombre : '', __X.getRolActual() || '', location.hash, resultado || 'SIN_RESPUESTA').catch(function () {});
+  } catch (e) {}
+}
+
+function fmt(n) { return __X.formatCLP ? __X.formatCLP(n) : String(n); }
+
+async function consultaFactura(num) {
+  if (!puede('finanzas:ver')) { dice('Tu rol no tiene acceso a Finanzas, así que no puedo consultar facturas.', [OP_MENU]); return; }
+  const t = msj('<span class="as-tipeo"><i></i><i></i><i></i></span> Consultando en la nube…', 'bot');
+  let filas;
+  try { filas = await __X.llamar('apiBuscarFacturasCC', [num]); }
+  catch (e) { t.parentNode.removeChild(t); dice('No pude consultar la nube ahora (' + escH((e && e.message) || e) + '). Inténtalo de nuevo en un momento.', [OP_MENU]); return; }
+  t.parentNode.removeChild(t);
+  if (!filas || !filas.length) { dice('No encontré la factura <b>' + escH(num) + '</b> en Cuentas Corrientes (puede estar eliminada o no importada).', [['Ir a Cuentas Corrientes →', 'ir:finanzas|', 'ok'], OP_MENU]); return; }
+  const h = filas.slice(0, 3).map(function (f) {
+    return '<b>Factura ' + escH(f.factura) + '</b> · ' + escH(f.razon || '') + ' · ' + escH(f.rut || '') + '<table><tr><td>Monto</td><td><b>' + fmt(f.monto) + '</b></td></tr><tr><td>Pagos</td><td>' + fmt(f.pagos) + '</td></tr><tr><td>Saldo</td><td><b>' + fmt(f.saldo) + '</b></td></tr><tr><td>Pagos registrados</td><td>' + (f.pagosPrevios || []).length + '</td></tr></table>';
+  }).join('<br>');
+  dice(h + '<br><small>Dato leído desde la nube.</small>', [['Ir a Cuentas Corrientes →', 'ir:finanzas|', 'ok'], OP_MENU]);
+}
+
+async function consultaCaso(texto) {
+  if (!puede('postventa:ver')) { dice('Tu rol no tiene acceso a Post Venta.', [OP_MENU]); return; }
+  try { if (__X.cargarCasos) await __X.cargarCasos(); } catch (e) {}
+  const q = norm(texto).replace(/^.*\bcaso\s*(n |no |numero )?/, '').trim();
+  const lista = (__X.casos ? __X.casos() : []).filter(function (c) { return norm(c.numero || '') === q || norm(c.numero || '').indexOf(q) >= 0 && q.length >= 3; }).slice(0, 3);
+  if (!lista.length) { dice('No encontré un caso con ese número.', [['Ir a Casos →', 'ir:postventa|casos', 'ok'], OP_MENU]); return; }
+  const h = lista.map(function (c) {
+    const est = (__X.ESTADOS_PV && __X.ESTADOS_PV[c.estado] && __X.ESTADOS_PV[c.estado].label) || c.estado;
+    const sig = (__X.ACCIONES_PV && __X.ACCIONES_PV[c.estado]) || '';
+    return '<b>Caso ' + escH(c.numero) + '</b> · ' + escH(c.tipoSolicitud || '') + '<br>Estado: <b>' + escH(est) + '</b><br>Producto: ' + escH(c.descripcion || c.sku || '—') + (sig ? '<br>Qué sigue: ' + escH(sig) : '');
+  }).join('<br><br>');
+  dice(h, [['Ir a Casos →', 'ir:postventa|casos', 'ok'], OP_MENU]);
+}
+
+async function consultaPedido(texto) {
+  if (!puede('pedidos:ver')) { dice('Tu rol no tiene acceso a Pedidos.', [OP_MENU]); return; }
+  const q = (norm(texto).match(/pedido\s*#?\s*(?:n |no |numero )?([a-z0-9\-]{2,})/) || [])[1] || '';
+  const lista = ((await store.lista('shopify_pedidos')) || []).filter(function (p) { return String(p.shopifyId || '').replace(/[^a-z0-9]/gi, '').toLowerCase() === q.replace(/[^a-z0-9]/gi, ''); }).slice(0, 3);
+  if (!lista.length) { dice('No encontré el pedido <b>' + escH(q) + '</b> en este equipo.', [['Ir a Pedidos →', 'ir:logistica|pedidos', 'ok'], OP_MENU]); return; }
+  dice(lista.map(function (p) { return '<b>Pedido ' + escH(p.shopifyId) + '</b><br>Origen: ' + escH(p.origen || '—') + ' · Tipo: ' + escH(p.type || '—') + '<br>Estado: <b>' + escH(p.status || '—') + '</b> · Etapa: ' + escH(p.etapaActual || '—'); }).join('<br><br>') + '<br><small>Dato de este equipo.</small>', [['Ir a Pedidos →', 'ir:logistica|pedidos', 'ok'], OP_MENU]);
+}
+
+function consultaProducto(texto) {
+  if (!puede('logistica:ver')) { dice('Tu rol no tiene acceso al catálogo.', [OP_MENU]); return false; }
+  const w = palabras(texto).filter(function (x) { return !/^(ubicacion|ubicado|ubicada|donde|esta|medidas|medida|peso|pesa|codigo|producto|dimension|dimensiones|mide|tamano)$/.test(x); });
+  if (!w.length) return false;
+  const todos = __X.productos ? __X.productos() : [];
+  let r = todos.filter(function (p) { return norm(p.codigo) === norm(w.join(' ')); });
+  if (!r.length) r = todos.filter(function (p) { const d = norm((p.descripcion || '') + ' ' + (p.codigo || '') + ' ' + (p.marca || '')); return w.every(function (x) { return d.indexOf(x) >= 0; }); });
+  if (!r.length) return false;
+  const h = r.slice(0, 4).map(function (p) {
+    let med = '';
+    try { const d = __X.dimensionesDeProducto ? __X.dimensionesDeProducto(p) : null; if (d && d.alto) med = '<br>📐 ' + d.ancho + ' × ' + d.alto + ' × ' + d.largo + ' cm · ' + d.peso + ' kg <small>(' + escH(d.fuente || 'estimado') + ')</small>'; } catch (e) {}
+    return '<b>' + escH(p.codigo) + '</b> — ' + escH(p.descripcion || '') + '<br>📍 Ubicación: ' + (p.ubicacion ? '<b>' + escH(p.ubicacion) + '</b>' : '<i>sin ubicación</i>') + med;
+  }).join('<br><br>') + (r.length > 4 ? '<br><small>… y ' + (r.length - 4) + ' coincidencias más: afina la búsqueda.</small>' : '');
+  dice(h, [['Ir al Catálogo →', 'ir:logistica|catalogo', 'ok'], OP_MENU]);
+  return true;
+}
+
+async function entrada(txt) {
+  msj(escH(txt), 'yo');
+  const t = norm(txt);
+  if (_modo === 'ia') { preguntarIA(txt); return; }
+  if (/^(menu|inicio|opciones)$/.test(t)) { inicio(); return; }
+  if (/^(temas|ayuda|preguntas frecuentes|faq)$/.test(t)) { listaTemas(); return; }
+  if (/^(gracias|grax|genial|perfecto|listo|excelente|ok|vale)( .*)?$/.test(t) && t.split(' ').length <= 3) { dice('¡De nada! 😊 Aquí estoy si necesitas algo más.', [OP_MENU]); return; }
+  if (/^(hola|buenas|buenos dias|buenas tardes|buenas noches)$/.test(t)) { inicio(); return; }
+  const mf = t.match(/(?:factura|fact|saldo|deuda|boleta)\s*(?:de la |del |n |no |numero |#)*\s*(\d{3,})/) || (/\b(saldo|deuda|pago|debe)\b/.test(t) ? t.match(/\b(\d{4,})\b/) : null);
+  if (mf) { await consultaFactura(mf[1]); return; }
+  if (/\bcaso\b/.test(t) && /\d/.test(t)) { await consultaCaso(txt); return; }
+  if (/\bpedido\b/.test(t) && /\d/.test(t)) { await consultaPedido(txt); return; }
+  const res = buscar(txt);
+  if (/\b(donde esta|ubicacion|ubicado|medidas|dimensiones|peso de|pesa|codigo de)\b/.test(t) && consultaProducto(txt)) return;
+  if (res.length && res[0].s >= 2) {
+    const otros = res.slice(1, 4).filter(function (r) { return r.s >= 2 && r.e.id !== res[0].e.id; });
+    const e = res[0].e;
+    _ult = e;
+    const ops = [];
+    if (e.ir) ops.push([e.ir[0] + ' →', 'ir:' + e.ir[1] + '|' + (e.ir[2] || ''), 'ok']);
+    otros.forEach(function (r) { ops.push(['Ver también: ' + r.e.t, 't:' + r.e.id]); });
+    ops.push(['📚 Todos los temas', 'faq']);
+    if (_est.iaActiva) { _pendiente = txt; ops.push(['✨ No era esto: analizar con IA', 'ia:q', 'ia']); }
+    ops.push(OP_MENU);
+    dice('<b>' + escH(e.t) + '</b>' + (e.aprendido ? ' <small>(respuesta validada por el administrador)</small>' : '') + '<br>' + e.r, ops);
+    return;
+  }
+  if (res.length) {
+    _pendiente = txt;
+    dice('No estoy seguro de lo que buscas. ¿Es alguno de estos temas?', res.slice(0, 4).map(function (r) { return [r.e.t, 't:' + r.e.id]; }).concat(opsIA(), [OP_MENU]));
+    registrarSinRespuesta(txt, 'AMBIGUA');
+    return;
+  }
+  _pendiente = txt;
+  registrarSinRespuesta(txt, 'SIN_RESPUESTA');
+  if (_est.iaActiva) {
+    dice('No encontré una respuesta directa en la guía. ¿Quieres que la IA la analice?', [['✨ Analizar con IA', 'ia:q', 'ia'], ['📚 Ver temas', 'faq'], OP_MENU]);
+  } else {
+    dice('No encontré una respuesta en la guía. Prueba con otras palabras o elige un área del menú.' + (_est.tieneApiKey ? '' : ' (El análisis con IA aún no está configurado.)'), [['📚 Ver temas', 'faq'], OP_MENU]);
+  }
+}
+
+async function cargarEstado() {
+  if (typeof __X.servidorDisponible === 'function' && !__X.servidorDisponible()) {
+    try { const c = await store.get(KEY_APREN, null); if (c && Array.isArray(c.lista)) _aprendido = c.lista; } catch (e) {}
+    return;
+  }
+  try {
+    const e = await __X.llamar('apiAsistenteEstado');
+    if (e && e.ok) { _est = Object.assign(_est, e, { cargado: true }); pintarMarca(); }
+  } catch (e) {}
+  try {
+    const l = await __X.llamar('apiAsistenteConocimiento');
+    if (Array.isArray(l)) { _aprendido = l; store.set(KEY_APREN, { lista: l, guardado: new Date().toISOString() }); }
+  } catch (e) {
+    try { const c = await store.get(KEY_APREN, null); if (c && Array.isArray(c.lista)) _aprendido = c.lista; } catch (e2) {}
+  }
+}
+
+function leerLogo(archivo) {
+  return new Promise(function (res, rej) {
+    const fr = new FileReader();
+    fr.onerror = function () { rej(new Error('No se pudo leer la imagen')); };
+    fr.onload = function () {
+      const img = new Image();
+      img.onerror = function () { rej(new Error('La imagen no es válida')); };
+      img.onload = function () {
+        const c = document.createElement('canvas');
+        c.width = 96; c.height = 96;
+        const ctx = c.getContext('2d');
+        const lado = Math.min(img.width, img.height);
+        ctx.drawImage(img, (img.width - lado) / 2, (img.height - lado) / 2, lado, lado, 0, 0, 96, 96);
+        res(c.toDataURL('image/png'));
+      };
+      img.src = fr.result;
+    };
+    fr.readAsDataURL(archivo);
+  });
+}
+
+async function abrirAdmin() {
+  if (!esAdmin()) return;
+  const ex = document.getElementById('rdmAsisAdm');
+  if (ex) ex.parentNode.removeChild(ex);
+  const m = document.createElement('div');
+  m.id = 'rdmAsisAdm';
+  m.innerHTML = '<div class="adm"><h3>⚙ Administrar el asistente</h3><div class="adm-tabs"><button data-t="rev" class="on">Aprendizaje</button><button data-t="sin">Sin respuesta</button><button data-t="cfg">Configuración</button><button data-t="cer" style="margin-left:auto">Cerrar</button></div><div id="admCuerpo"><div class="page-subtitle">Cargando…</div></div></div>';
+  document.body.appendChild(m);
+  const cuerpo = m.querySelector('#admCuerpo');
+  let datos = null;
+  const cerrarM = function () { m.parentNode && m.parentNode.removeChild(m); };
+  m.addEventListener('click', function (ev) { if (ev.target === m) cerrarM(); });
+  async function recargar() {
+    try { datos = await __X.llamar('apiAsistenteRevision'); } catch (e) { datos = null; cuerpo.innerHTML = '<div class="warn">No fue posible leer la revisión: ' + escH((e && e.message) || e) + '</div>'; return false; }
+    return true;
+  }
+  function pintar(tab) {
+    Array.prototype.forEach.call(m.querySelectorAll('.adm-tabs button'), function (b) { b.classList.toggle('on', b.getAttribute('data-t') === tab); });
+    if (tab === 'rev') pintarRev(); else if (tab === 'sin') pintarSin(); else pintarCfg();
+  }
+  function pintarRev() {
+    const p = (datos && datos.pendientes) || [];
+    cuerpo.innerHTML = '<div class="page-subtitle">Gemini no aprende solo: cada respuesta de la IA queda aquí pendiente. Al <b>aprobarla</b> (puedes editarla) pasa a la guía del asistente y se responde sin IA a todos los usuarios. Aprobadas hasta ahora: <b>' + ((datos && datos.aprobadas) || 0) + '</b>.</div>' +
+      (p.length ? p.map(function (x, i) {
+        return '<div class="adm-c" data-i="' + i + '"><div><b>' + escH(x.pregunta) + '</b><br><small>' + escH(x.usuario || '') + ' · ' + escH(x.modulo || '') + ' · 👍 ' + (x.util || 0) + ' 👎 ' + (x.noUtil || 0) + '</small></div>' +
+          '<label>Título<input type="text" class="f-t" value="' + escAttr(x.titulo || x.pregunta) + '"></label><label>Palabras clave (separadas por coma)<input type="text" class="f-k" value="' + escAttr(x.claves || '') + '"></label>' +
+          '<label>Respuesta<textarea class="f-r" rows="5">' + escH(x.respuesta) + '</textarea></label>' +
+          '<div class="adm-f"><button class="btn-success btn-sm" data-ac="APROBAR">Aprobar</button><button class="btn-outline btn-sm" data-ac="RECHAZAR">Rechazar</button><button class="btn-outline btn-sm" data-ac="ELIMINAR">Eliminar</button></div></div>';
+      }).join('') : '<div class="info">No hay respuestas de la IA pendientes de revisión.</div>');
+    Array.prototype.forEach.call(cuerpo.querySelectorAll('.adm-c [data-ac]'), function (b) {
+      b.addEventListener('click', async function () {
+        const card = b.closest('.adm-c');
+        const x = p[+card.getAttribute('data-i')];
+        const ac = b.getAttribute('data-ac');
+        if (ac === 'ELIMINAR' && !confirm('¿Eliminar este registro?')) return;
+        b.disabled = true;
+        try {
+          const u = __X.getUsuarioActual();
+          const r = await __X.llamar('apiAsistenteCurar', x.id, ac, { titulo: card.querySelector('.f-t').value, claves: card.querySelector('.f-k').value, respuesta: card.querySelector('.f-r').value, usuario: u ? u.nombre : '' });
+          if (r && r.ok) { toast(ac === 'APROBAR' ? 'Aprobada: ya forma parte de la guía' : 'Listo', 'success'); await recargar(); await cargarEstado(); pintar('rev'); }
+          else { toast((r && r.error) || 'No se pudo completar', 'error'); b.disabled = false; }
+        } catch (e) { toast('Error: ' + ((e && e.message) || e), 'error'); b.disabled = false; }
+      });
+    });
+  }
+  function pintarSin() {
+    const s = (datos && datos.sinRespuesta) || [];
+    cuerpo.innerHTML = '<div class="page-subtitle">Preguntas que el asistente no pudo responder directamente (sin datos personales). Úsalas para ampliar la guía.</div>' +
+      (s.length ? '<table style="width:100%;font-size:13px"><thead><tr><th style="text-align:left">Pregunta</th><th>Veces</th></tr></thead><tbody>' + s.map(function (x) { return '<tr><td>' + escH(x.pregunta) + '</td><td style="text-align:center">' + x.veces + '</td></tr>'; }).join('') + '</tbody></table>' : '<div class="info">Aún no hay preguntas sin respuesta.</div>');
+  }
+  function pintarCfg() {
+    cuerpo.innerHTML = '<div class="adm-c"><b>Análisis con IA (Gemini)</b><br><small>Clave en el servidor: <b>' + (_est.tieneApiKey ? 'configurada' : 'FALTA') + '</b> · Modelo: ' + escH(_est.modelo || '—') + ' · Hoy: ' + (_est.usadasHoy || 0) + ' de ' + (_est.tope || 0) + ' consultas</small>' +
+      '<div class="adm-f"><label><input type="checkbox" id="cIa" ' + (_est.iaDesactivada ? '' : 'checked') + '> Permitir el análisis con IA</label></div>' +
+      (_est.tieneApiKey ? '' : '<div class="warn" style="margin-top:6px">Agrega la propiedad <b>GEMINI_API_KEY</b> en Apps Script → Configuración del proyecto → Propiedades del script. Opcionales: GEMINI_MODELO y GEMINI_TOPE_DIA.</div>') + '</div>' +
+      '<div class="adm-c"><b>Imagen del asistente</b><div class="adm-f" style="align-items:center"><div class="as-av" style="background:#6b2a72;color:#fff;width:56px;height:56px;border-radius:50%;display:flex;align-items:center;justify-content:center;overflow:hidden" id="cPrev">' + (_est.logo ? '<img src="' + escAttr(_est.logo) + '" style="width:100%;height:100%;object-fit:cover">' : LOGO_DEFECTO) + '</div>' +
+      '<input type="file" id="cLogo" accept="image/*"><button class="btn-outline btn-sm" id="cQuitar">Usar la imagen por defecto</button></div><small>Se recorta en cuadrado y se reduce a 96 × 96 px. Puedes cambiarla cuando quieras (por ejemplo, un logo que represente el aprendizaje del asistente).</small></div>' +
+      '<div class="adm-c"><b>Nombre</b><input type="text" id="cNom" maxlength="40" value="' + escAttr(_est.nombre || 'Asistente Gestor') + '"></div>' +
+      '<div class="adm-f"><button class="btn-success btn-sm" id="cGuardar">Guardar configuración</button></div>';
+    let logoNuevo;
+    cuerpo.querySelector('#cLogo').addEventListener('change', async function (ev) {
+      const f = ev.target.files[0];
+      if (!f) return;
+      try { logoNuevo = await leerLogo(f); cuerpo.querySelector('#cPrev').innerHTML = '<img src="' + logoNuevo + '" style="width:100%;height:100%;object-fit:cover">'; }
+      catch (e) { toast((e && e.message) || 'Imagen no válida', 'error'); }
+    });
+    cuerpo.querySelector('#cQuitar').addEventListener('click', function () { logoNuevo = ''; cuerpo.querySelector('#cPrev').innerHTML = LOGO_DEFECTO; });
+    cuerpo.querySelector('#cGuardar').addEventListener('click', async function () {
+      const cfg = { iaActiva: cuerpo.querySelector('#cIa').checked, nombre: cuerpo.querySelector('#cNom').value };
+      if (logoNuevo !== undefined) cfg.logo = logoNuevo;
+      try { await __X.llamar('apiAsistenteConfigurar', cfg); toast('Configuración guardada', 'success'); await cargarEstado(); pintar('cfg'); }
+      catch (e) { toast('No se pudo guardar: ' + ((e && e.message) || e), 'error'); }
+    });
+  }
+  m.querySelector('.adm-tabs').addEventListener('click', function (ev) {
+    const b = ev.target.closest('button');
+    if (!b) return;
+    const t = b.getAttribute('data-t');
+    if (t === 'cer') { cerrarM(); return; }
+    pintar(t);
+  });
+  await cargarEstado();
+  if (await recargar()) pintar('rev');
+}
+
+function visibilidad() {
+  if (!_raiz) return;
+  const ok = autenticado();
+  _raiz.style.display = ok ? '' : 'none';
+  if (ok && !_est.cargado && !_est._pidiendo) {
+    _est._pidiendo = true;
+    cargarEstado().then(function () {
+      if (_raiz && !localStorage.getItem(KEY_POP) && !_raiz.querySelector('#asPanel').classList.contains('abierto')) _raiz.querySelector('#asPop').style.display = 'inline-block';
+    });
+  }
+  if (!ok && _raiz.querySelector('#asPanel').classList.contains('abierto')) cerrar();
+}
+
+function iniciar() {
+  montar();
+  visibilidad();
+  setInterval(visibilidad, 1500);
+}
+
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', iniciar); else iniciar();
+
+__X.asistente = { abrir: abrir, buscar: buscar, base: function () { return BASE.slice(); } };
+})();
+window.__FIN=(window.__FIN||[]);window.__FIN.push("11_asistente");</script>
 
 <script>window.__INICIO=(window.__INICIO||[]);window.__INICIO.push("restauracion integral");
 
