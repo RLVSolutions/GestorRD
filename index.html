@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Gestor RD Musico · v20261030-0340</title>
+<title>Gestor RD Musico · v20261030-0401</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -28683,7 +28683,7 @@ const KEY_SEG = 'int_sat_seguimiento';
 const RANGO = { pendiente: 0, preparacion: 1, listo: 2, despachado: 3, entregado: 4 };
 const ESTADOS = ['pendiente', 'preparacion', 'listo', 'despachado', 'entregado'];
 const ESTADO_LABEL = { pendiente: 'Pendiente', preparacion: 'En preparación', listo: 'Listo', despachado: 'Despachado', entregado: 'Entregado', anulado: 'Anulado' };
-const OPCION_MENU = { nombre: 'Satélite', icono: '🛰️', modulo: 'satelite', sub: null, permiso: 'logistica:ver' };
+const OPCION_MENU = { nombre: 'Satélite', icono: '🛰️', modulo: 'satelite', sub: null, permiso: 'admin:configurar_cloud' };
 
 let _box = null;
 let _est = null;
@@ -29012,7 +29012,7 @@ function tarjetaRegistro() {
 
 function pintar() {
   if (!_box || !_box.isConnected) return;
-  if (!puede('logistica:ver')) { _box.innerHTML = '<div class="warn">No tienes permiso para ver esta pantalla.</div>'; return; }
+  if (!admin()) { _box.innerHTML = '<div class="warn">No tienes permiso para ver esta pantalla.</div>'; return; }
   _box.innerHTML = '<h1>🛰️ Integración con Satélite</h1><div class="page-subtitle">Satélite es el especialista de operación en bodega (cubicación, packing, despacho, rotulado, seguimiento). El ERP lleva el negocio completo. Aquí se ven los datos que comparten.</div>' +
     tarjetaConexion() + tarjetaCompartido() + tarjetaCotizador() + tarjetaPedidos() + tarjetaSeguimiento() + tarjetaPV() + tarjetaRegistro();
   enganchar();
@@ -29103,10 +29103,10 @@ function seguimientoDe(numero) {
 
 function instalarMenu() {
   const grupos = __X.GRUPOS || [];
-  const g = grupos.find(function (x) { return x.id === 'operaciones'; });
+  const g = grupos.find(function (x) { return x.id === 'administracion'; });
   if (!g) return;
   if (g.opciones.some(function (o) { return o.modulo === 'satelite'; })) return;
-  const i = g.opciones.findIndex(function (o) { return o.sub === 'packing'; });
+  const i = g.opciones.findIndex(function (o) { return o.sub === 'importaciones'; });
   g.opciones.splice(i >= 0 ? i + 1 : g.opciones.length, 0, OPCION_MENU);
   try { if (typeof __X.dibujarMenu === 'function') __X.dibujarMenu(__X.router.idActual(), __X.router.subActual()); } catch (e) {}
 }
@@ -29140,7 +29140,7 @@ function urlSatelite() { return (_est && _est.urlWeb) || ''; }
 
 function abrirSatelite() {
   const u = urlSatelite();
-  if (!u) { toast('Falta la dirección de Satélite: configúrala en Operaciones › Satélite', 'warn'); return false; }
+  if (!u) { toast('Falta la dirección de Satélite: configúrala en Administración › Satélite', 'warn'); return false; }
   window.open(u, '_blank', 'noopener');
   return true;
 }
