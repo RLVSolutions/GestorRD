@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Gestor RD Musico · v20261025-2100</title>
+<title>Gestor RD Musico · v20261030-0340</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -3816,7 +3816,8 @@ async function transitarCaso(id, nuevoEstado, usuario, detalle, opciones = {}) {
                 const labelReal = (ESTADOS_PV[actualRemoto.estado] || {}).label || actualRemoto.estado;
                 return { ok: false, conflicto: true, error: 'Otro equipo ya cambio el estado a "' + labelReal + '"', caso: c };
             }
-            if (!r || !r.ok) return { ok: false, error: (r && r.error) || 'No se pudo cambiar el estado' };
+            if (r && r.inexistente) huboFalloRed = true;
+            else if (!r || !r.ok) return { ok: false, error: (r && r.error) || 'No se pudo cambiar el estado' };
         } catch(e) { huboFalloRed = true;  }
     } else {
         huboFalloRed = true;
@@ -4609,6 +4610,7 @@ __X.claseDePuntaje = claseDePuntaje;
 
     __X.ejecutarMigraciones = ejecutarMigraciones;
 })();
+
 window.__FIN=(window.__FIN||[]);window.__FIN.push("02_nucleo");</script>
 
 
@@ -7847,7 +7849,8 @@ const SUB = [
     { id: 'bul', nombre: '📦 Rotulado de Bultos', fn: _bultos },
     { id: 'rap', nombre: '⚡ Rotulado Rápido', fn: _rotuladoRapido },
     { id: 'cod', nombre: '🏷️ Codificado de Productos', fn: _codificado },
-    { id: 'dis', nombre: '🎨 Creación de Etiquetas', fn: _disenador }
+    { id: 'dis', nombre: '🎨 Creación de Etiquetas', fn: _disenador },
+    { id: 'dir', nombre: '📄 Dirección A4', fn: function (c) { if (__X.homologacion) __X.homologacion.vistaRotulosDireccion(c); } }
 ];
 let _sub = 'bul';
 
@@ -8681,7 +8684,6 @@ function _dibujarDisenador(cont, editId) {
             </div>
             <h2 style="margin-top:10px;">Campos a imprimir</h2>
             <div class="checkbox-group" id="fCampos"></div>
-            <!-- NUEVO (Tarea 2): propiedades por campo (X, Y, alineación, fuente, rotación) -->
             <h2 style="margin-top:12px;">Propiedades de cada campo</h2>
             <div class="info">Define dónde y cómo se imprime cada campo marcado. Si dejas todo en 0, el campo se apila de forma automática como antes.</div>
             <div id="fPropsCampos"></div>
@@ -8875,8 +8877,6 @@ ${_TAG_ABRE}${_GT}
     function imprimir(){ setTimeout(function(){ window.print(); }, 120); }
     window.onload = function(){
         ${barrasJs}
-        // Se espera a que las barras estén realmente dibujadas antes de imprimir:
-        // antes se imprimía a ciegas a los 400ms y a veces salían sin código.
         var svgs = document.querySelectorAll('svg');
         if (!svgs.length) { imprimir(); return; }
         var intentos = 0;
@@ -8893,6 +8893,7 @@ ${_TAG_ABRE}${_GT}
 
 __X.FUENTES = FUENTES; __X.PROP_DEFECTO = PROP_DEFECTO; __X.propCampo = propCampo; __X.renderRotulado = renderRotulado; __X.plantillasRapido = plantillasRapido; __X.guardarPlantillaRapido = guardarPlantillaRapido; __X.eliminarPlantillaRapido = eliminarPlantillaRapido; __X.resolverMarcadores = resolverMarcadores; __X.imprimirEtiquetas = imprimirEtiquetas;
 })();
+
 window.__FIN=(window.__FIN||[]);window.__FIN.push("06_rotulado");</script>
 <script>window.__INICIO=(window.__INICIO||[]);window.__INICIO.push("07a_cotizador_ot");
 window.__CONTRATOS = (window.__CONTRATOS||[]);window.__CONTRATOS.push({archivo:"07a_cotizador_ot",provee:["calcularPesos","estimarCosto","construirUrlOperador","renderCotizador","cargarOTs","cargarConfigsReporte","crearOT","asignarPedidoAOT","renderOT","renderDespachos","agregarFilaDesdeExterno","calcularBultoDeLineas","dimensionesDeProducto","cargarConfigCotizador","guardarConfigCotizador","restaurarConfigCotizador"],requiere:["escH","escAttr","toast","formatCLP","store","getRolActual","tienePermisoGranular","imprimirDocumento","kpiDoc","estadoSync","subirModulo","nuevoId","imprimirEtiquetas","cargarFormatos","getFormato","listaPorProceso","abrirDirecciones","resumenDirecciones","cargarCatalogo","productos","getProducto","maestroLista"]});
@@ -10299,6 +10300,63 @@ function _modalOperador(idx) {
 
 __X.calcularPesos = calcularPesos;
 __X.estimarCosto = estimarCosto;
+
+async function paqueteCotizadorSatelite() {
+    await _cargarDatos();
+    const Geo = __X.homologacion && __X.homologacion.Geo;
+    if (!Geo) throw new Error('El catálogo de comunas no está disponible.');
+    Geo.iniciar();
+    const hoy = new Date().toISOString().slice(0, 10);
+    const regiones = {};
+    Geo.lista.forEach(function (o) {
+        const z = _zonaDeComuna(o.c);
+        if (!o.r) return;
+        (regiones[o.r] = regiones[o.r] || []).push({ c: o.c, z: z ? z.id : '' });
+    });
+    const asignacion = [];
+    const extendidas = [];
+    Object.keys(regiones).forEach(function (r) {
+        const cont = {};
+        regiones[r].forEach(function (x) { if (x.z) cont[x.z] = (cont[x.z] || 0) + 1; });
+        let may = '', n = 0;
+        Object.keys(cont).forEach(function (z) { if (cont[z] > n) { n = cont[z]; may = z; } });
+        if (may) asignacion.push({ t: 'REGION', d: r, z: may });
+        if (may === 'z3' || may === 'z4') extendidas.push(r);
+        regiones[r].forEach(function (x) {
+            if (x.z && x.z !== may) asignacion.push({ t: 'COMUNA', d: x.c, z: x.z });
+            if ((x.z === 'z3' || x.z === 'z4') && may !== 'z3' && may !== 'z4') extendidas.push(x.c);
+        });
+    });
+    let zeLista = '';
+    extendidas.forEach(function (x) { if ((zeLista + ',' + x).length <= 990) zeLista += (zeLista ? ',' : '') + x; });
+    const segPct = Math.round((Number(_config.factorSeguro) || 0.01) * 10000) / 100;
+    return _operadores.filter(function (op) { return op && op.tramos; }).map(function (op) {
+        const tarifas = [];
+        const courier = String(op.nombre || op.id || '').toUpperCase().trim();
+        asignacion.forEach(function (a) {
+            const tr = ((op.tramos && op.tramos[a.z]) || []).slice().sort(function (x, y) { return x.hasta - y.hasta; });
+            const base = Number(op.tarifaBase && op.tarifaBase[a.z]) || 0;
+            const plazo = op.plazoDias && op.plazoDias[a.z] != null ? Number(op.plazoDias[a.z]) : null;
+            let de = 0;
+            tr.forEach(function (t, i) {
+                const ultimo = i === tr.length - 1 || t.hasta >= 9999;
+                const p = Number(t.precio) || 0;
+                tarifas.push([courier, 'NORMAL', a.t, a.d, de, ultimo ? null : t.hasta, Math.round(p * de + base), p, plazo]);
+                de = t.hasta;
+            });
+        });
+        return {
+            courier: courier, id: op.id,
+            param: {
+                en: true, fv: 4000, red: 'ENTERO', cobro: 'ENVIO', rec: Number(op.recargoCombustible) || 0, seg: segPct, url: op.url || '',
+                fuente: 'Tarifas del ERP (' + courier + ')', desde: hoy, hasta: '', cargoBulto: Number(op.cargoPorBulto) || 0,
+                zePct: Number(op.recargoZonaExtendida) || 0, zeLista: zeLista, iva: 'INCLUIDO', notas: 'Sincronizado desde el ERP'
+            },
+            tarifas: tarifas
+        };
+    }).filter(function (x) { return x.courier && x.tarifas.length; });
+}
+__X.paqueteCotizadorSatelite = paqueteCotizadorSatelite;
 __X.construirUrlOperador = construirUrlOperador;
 __X.renderCotizador = renderCotizador;
 __X.calcularBultoDeLineas = calcularBultoDeLineas;
@@ -11045,6 +11103,7 @@ function _generarEtiquetas(box) {
 __X.renderDespachos = renderDespachos;
 __X.agregarFilaDesdeExterno = agregarFilaDesdeExterno;
 })();
+
 window.__FIN=(window.__FIN||[]);window.__FIN.push("07a_cotizador_ot");</script>
 <script>window.__INICIO=(window.__INICIO||[]);window.__INICIO.push("07b_packing");
 (function () {
@@ -11340,6 +11399,7 @@ function _seccionOT() {
                 ? '<button class="btn-outline btn-sm" id="pkReabrirOT" title="Devuelve la OT a vigentes">🔓 Reabrir OT</button>'
                 : '<button class="btn-success btn-sm" id="pkCerrarOT" title="Genera el manifiesto y marca la OT como despachada">🔒 Cerrar OT</button>') +
             '<button class="btn-primary btn-sm" id="pkSatelite" title="OT, bultos y despachos del Packing Móvil">🛰️ Satélite</button>' +
+            '<button class="btn-outline btn-sm" id="pkRotulosA4" title="Rótulo de dirección A4 de cada documento de la OT, uno por bulto">🏷️ Rótulos A4 de la OT</button>' +
             '<span class="toolbar-right page-subtitle" id="pkOTResumen"></span>' +
         '</div>' +
 
@@ -11377,6 +11437,7 @@ function _wireOT() {
     g('#pkEliminarOT').addEventListener('click', _eliminarOT);
     g('#pkGuardarOT').addEventListener('click', _guardarOT);
     g('#pkSatelite').addEventListener('click', () => _abrirSatelite());
+    g('#pkRotulosA4').addEventListener('click', () => { if (__X.homologacion) __X.homologacion.rotulosDeOT(_ordenActiva); else toast('Módulo no disponible', 'error'); });
 
     const ord = _ordenActiva;
     g('#pkOTResumen').textContent = ord
@@ -11426,7 +11487,7 @@ async function _cerrarOT() {
     _guardar();
     toast('OT cerrada: ' + (ot.orden || ''), 'success');
     _renderTodo();
-    try { _generarReporteTransporte('manifiesto', 'pdf'); } catch (e) { toast('OT cerrada; no se pudo generar el manifiesto: ' + e.message, 'warn'); }
+    _generarReporteTransporte('manifiesto', 'pdf').catch(function (e) { toast('OT cerrada; no se pudo generar el manifiesto: ' + e.message, 'warn'); });
 }
 
 function _reabrirOT() {
@@ -12448,17 +12509,29 @@ function crearSolicitudPackingRMA(caso, proveedor) {
 }
 
 
-function _generarReporteTransporte(tipo, fmt) {
+async function _generarReporteTransporte(tipo, fmt) {
     const titulo = tipo==='ordenTransporte'?'Orden de Transporte':tipo==='manifiesto'?'Manifiesto de Envío':'Lista de Bultos';
     const fecha = new Date().toLocaleDateString('es-CL');
-    const mandantes = _ordenActiva?.mandantes||[];
-    const bultos = _ordenActiva?.bultos||[];
+    const ot = _ordenActiva;
+    const mandantes = (ot && ot.mandantes)||[];
+    const bultos = (ot && ot.bultos)||[];
+    let destinos = [];
+    try { if (__X.homologacion) destinos = await __X.homologacion.datosManifiesto(mandantes); } catch (e) { destinos = []; }
+    const pesoKg = b => { const v = Number(b.peso)||0; return b.unidadPeso === 'g' ? v/1000 : v; };
+    let totBultos = 0, totPeso = 0, totVol = 0;
     const filasMand = mandantes.map((m,i) => {
-        const nb = bultos.filter(b => b.mandanteIdx === i).length;
+        const propios = bultos.filter(b => b.mandanteIdx === i || (b.mandanteId != null && String(b.mandanteId) === String(m.id)));
+        const nb = m.cantidadBultosManual ? (Number(m.cantidadBultos)||0) : propios.length;
+        const peso = propios.reduce((t,b) => t + pesoKg(b), 0);
+        const vol = propios.reduce((t,b) => t + (Number(b.volumenM3)||0), 0);
+        totBultos += nb; totPeso += peso; totVol += vol;
+        const d = destinos[i] || null;
+        const destTxt = d ? [d.nombre, [d.calle, d.numero].filter(Boolean).join(' '), d.referencia, d.telefono ? 'Tel ' + d.telefono : ''].filter(Boolean).join(' · ') : (m.direcciones||[]).map(dir => dir.nombre||dir.direccion||'').join('; ');
+        const comuna = d ? [d.comuna, d.region].filter(Boolean).join(' · ') : '';
         return `<tr><td>${i+1}</td><td>${escH(m.ordenVoucher||'—')}</td><td>${escH(m.documento||'')} ${escH(m.numeroDoc||'')}</td>
-        <td>${escH(m.canal||'')}</td><td style="text-align:center">${m.cantidadBultosManual?m.cantidadBultos:nb}</td>
-        <td>${escH(m.fechaEnvio||'')}</td><td>${escH(m.indicador||'')}</td>
-        <td>${escH((m.direcciones||[]).map(dir => dir.nombre||dir.direccion||'').join('; '))}</td></tr>`;
+        <td>${escH(m.canal||'')}</td><td>${escH(destTxt)}</td><td>${escH(comuna)}</td><td style="text-align:center">${nb}</td>
+        <td style="text-align:right">${peso ? peso.toFixed(2) : '—'}</td>
+        <td>${escH(m.fechaEnvio||'')}</td><td>${escH(m.indicador||'')}</td></tr>`;
     }).join('');
     const fBultos = tipo==='ordenTransporte' ? bultos.map(b => {
         const m = mandantes[b.mandanteIdx]||{};
@@ -12467,17 +12540,19 @@ function _generarReporteTransporte(tipo, fmt) {
         <td>${b.cerrado ? 'Cerrado' : 'Abierto'}</td></tr>`;
     }).join('') : '';
     const html = `<h1 style="text-align:center;">${titulo}</h1>
-    <p style="text-align:center;font-size:11pt;">OT: <b>${escH(_ordenActiva?.orden||'—')}</b> · Fecha: ${fecha}
-    ${_ordenActiva?.responsable ? ' · Responsable: '+escH(_ordenActiva.responsable) : ''}
-    ${_ordenActiva?.movil ? ' · Móvil: '+escH(_ordenActiva.movil) : ''}</p>
-    <table border="1" style="width:100%;border-collapse:collapse;font-size:10pt;">
+    <p style="text-align:center;font-size:11pt;">OT: <b>${escH((ot && ot.orden)||'—')}</b> · Fecha: ${fecha}
+    ${ot && ot.responsable ? ' · Responsable: '+escH(ot.responsable) : ''}
+    ${ot && ot.movil ? ' · Móvil: '+escH(ot.movil) : ''}</p>
+    <table border="1" style="width:100%;border-collapse:collapse;font-size:9pt;">
     <thead style="background:#1e40af;color:#fff;"><tr><th>#</th><th>Orden/Voucher</th><th>Documento</th><th>Canal</th>
-    <th>Bultos</th><th>F.Envío</th><th>Indicador</th><th>Dirección</th></tr></thead>
-    <tbody>${filasMand}</tbody></table>
+    <th>Destinatario</th><th>Comuna · región</th><th>Bultos</th><th>Peso kg</th><th>F.Envío</th><th>Indicador</th></tr></thead>
+    <tbody>${filasMand}</tbody>
+    <tfoot><tr style="font-weight:bold;background:#f1f5f9;"><td colspan="6" style="text-align:right">TOTAL (${mandantes.length} documento(s))</td><td style="text-align:center">${totBultos}</td><td style="text-align:right">${totPeso ? totPeso.toFixed(2) : '—'}</td><td colspan="2">${totVol ? 'Vol. ' + totVol.toFixed(3) + ' m³' : ''}</td></tr></tfoot></table>
     ${tipo==='ordenTransporte'&&bultos.length?`<h2 style="margin-top:16pt;">Detalle de Bultos</h2>
     <table border="1" style="width:100%;border-collapse:collapse;font-size:9pt;">
     <thead style="background:#1e40af;color:#fff;"><tr><th>N° Bulto</th><th>Orden/Voucher</th><th>Documento</th><th>Canal</th><th>Productos</th><th>Estado</th></tr></thead>
     <tbody>${fBultos}</tbody></table>`:''}
+    ${tipo==='manifiesto'?`<div style="display:flex;gap:30pt;margin-top:46pt;font-size:9pt;"><div style="flex:1;border-top:1px solid #111;padding-top:4pt;text-align:center;">Entrega (Bodega RD Musico)</div><div style="flex:1;border-top:1px solid #111;padding-top:4pt;text-align:center;">Recibe conforme (Courier / Conductor)</div></div>`:''}
     <p style="margin-top:12pt;font-size:9pt;color:#666;">Generado por Gestor RD Musico · ${fecha}</p>`;
     if (fmt==='pdf'&&imprimirDocumento) imprimirDocumento({titulo,contenido:html});
     else if (fmt==='word'&&descargarWord) descargarWord({titulo,contenido:html},titulo.replace(/ /g,'_'));
@@ -12687,7 +12762,21 @@ __X.imprimirVoucherBultos = _imprimirVoucherBultos;
 __X.agregarDesdeExterno     = agregarDesdeExterno;
 __X.agregarFilaDesdeExterno = agregarFilaDesdeExterno;
 __X.crearSolicitudPackingRMA = crearSolicitudPackingRMA;
+__X.reporteTransporte = _generarReporteTransporte;
+__X.bultosDePedido = function (p) {
+    if (!p || !p.id) return 0;
+    let n = 0;
+    (_ordenes || []).forEach(function (o) {
+        (o.mandantes || []).forEach(function (m, i) {
+            if (String(m.pedidoId || '') !== String(p.id)) return;
+            if (m.cantidadBultosManual) { n += Number(m.cantidadBultos) || 0; return; }
+            n += (o.bultos || []).filter(function (b) { return b.mandanteIdx === i || (b.mandanteId != null && String(b.mandanteId) === String(m.id)); }).length;
+        });
+    });
+    return n;
+};
 })();
+
 window.__FIN=(window.__FIN||[]);window.__FIN.push("07b_packing");</script>
 
 <script>window.__INICIO=(window.__INICIO||[]);window.__INICIO.push("07c_pedidos");
@@ -12874,6 +12963,8 @@ function _dibujar() {
     <div class="toolbar">
         ${puedeCrear ? '<button class="btn-success btn-sm" id="pedAgregar">➕ Nuevo pedido</button>' : ''}
         <button class="btn-outline btn-sm" id="pedImpExcel">📂 Importar Excel</button>
+        <button class="btn-outline btn-sm" id="pedPegar">📋 Pegar desde Excel/Shopify</button>
+        <button class="btn-outline btn-sm" id="pedRotulosDir">🏷️ Rótulos de dirección</button>
         <span class="sep"></span>
         <button class="btn-outline btn-sm" id="pedReporte">📊 Reporte del día</button>
         ${puedeBorrarTodo ? '<button class="btn-danger btn-sm" id="pedBorrarTodos">🗑️ Eliminar todos</button>' : ''}
@@ -12897,6 +12988,13 @@ function _dibujar() {
     const btnAdd = g('#pedAgregar');
     g('#pedVolver')?.addEventListener('click', function(){ location.hash = '#/dashboard'; });
     g('#pedImpExcel')?.addEventListener('click', _importarExcelPedidos);
+    g('#pedPegar')?.addEventListener('click', function () { if (__X.homologacion) __X.homologacion.abrirImportacion(); else toast('Módulo no disponible', 'error'); });
+    g('#pedRotulosDir')?.addEventListener('click', function () {
+        const sel = _pedidosSeleccionados().map(function (p) { return p.id; });
+        if (!__X.homologacion) { toast('Módulo no disponible', 'error'); return; }
+        if (!sel.length) { toast('Marca los pedidos para los que quieres rótulo', 'warn'); return; }
+        __X.homologacion.rotuloVarios(sel);
+    });
     g('#pedOrden')?.addEventListener('change', function(){ _refrescar(); });
     g('#pedEnviarPacking')?.addEventListener('click', async function(){
         var sel = _pedidosSeleccionados();
@@ -13051,6 +13149,8 @@ function _abrirDetalle(p) {
                 ${p.packingRef ? ` · 🔗 Packing <b>${escH(p.packingRef.otOrden)}</b>` : ''}
                 ${p.despachoRef ? ` · 🔗 Despacho fila <b>#${p.despachoRef.filaCorrelativo}</b>` : ''}
             </div>
+            <div id="pdEnvio" class="page-subtitle" style="margin-bottom:6px;"></div>
+            <div id="pdSat" class="page-subtitle" style="margin-bottom:6px;"></div>
             <div class="form-grid">
                 <div><label>Cliente</label><input value="${escAttr(p.customer)}" readonly></div>
                 <div><label>Tipo</label><input value="${p.type === 'despacho' ? '🚚 Despacho' : '🏪 Retiro'}" readonly></div>
@@ -13060,14 +13160,12 @@ function _abrirDetalle(p) {
             </div>
             ${p.notes ? `<div style="margin-top:8px;"><label>Notas</label><input value="${escAttr(p.notes)}" readonly></div>` : ''}
             ${!cerrado ? '<div style="margin-top:8px;"><label>Nota para este cambio (opcional)</label><input id="pdNota" placeholder="Ej: cliente confirmó por WhatsApp"></div>' : ''}
-            <!-- NUEVO Tarea A: control de plazo del pedido -->
             ${p.fechaEntregaComprometida || p.diasRetraso ? `<div class="${p.diasRetraso > 0 ? 'error' : 'info'}" style="margin-top:8px;">
                 Compromiso: <b>${escH(p.fechaEntregaComprometida || '—')}</b>
                 ${p.fechaDespachoReal ? ` · Despacho real: <b>${escH((p.fechaDespachoReal || '').split('T')[0])}</b>` : ''}
                 ${p.diasRetraso > 0 ? ` · <b>${p.diasRetraso} día(s) de retraso</b>` : ''}
                 ${p.multaPotencial > 0 ? ` · Multa potencial: <b>${formatCLP(p.multaPotencial)}</b>` : ''}
             </div>` : ''}
-            <!-- NUEVO Tarea C: línea de tiempo estructurada del pedido -->
             <h2 style="margin-top:14px;">Línea de tiempo</h2>
             <div style="max-height:150px;overflow:auto;">${(p.timeline || []).length
                 ? (p.timeline || []).map(e => `<div class="page-subtitle">🔹 ${escH((e.fecha || '').replace('T', ' ').slice(0, 16))} — <b>${escH(e.evento)}</b>${e.detalle ? ' · ' + escH(e.detalle) : ''} <i>(${escH(e.usuario || '')})</i></div>`).join('')
@@ -13084,6 +13182,8 @@ function _abrirDetalle(p) {
             ${puedeAnular ? '<button class="btn-danger btn-sm" id="pdAnular">🚫 Anular</button>' : ''}
             ${puedeReopen ? '<button class="btn-amber btn-sm" id="pdReopen">↺ Reabrir</button>' : ''}
             ${puedeEtiqueta ? '<button class="btn-outline btn-sm" id="pdEtiqueta">🏷️ Etiqueta</button>' : ''}
+            <button class="btn-outline btn-sm" id="pdEnvioBtn">📮 Datos de envío</button>
+            <button class="btn-outline btn-sm" id="pdRotulo">🏷️ Rótulo de dirección</button>
             ${!cerrado && !p.packingRef && puedeAPacking ? '<button class="btn-secondary btn-sm" id="pdAPacking">📦 Enviar a Packing</button>' : ''}
             ${!cerrado && puedeADespacho ? '<button class="btn-secondary btn-sm" id="pdADespacho">🚚 Enviar a Despacho</button>' : ''}
             ${puedeEliminar ? '<button class="btn-outline btn-sm" id="pdEliminar" style="margin-left:auto;">🗑️ Eliminar</button>' : ''}
@@ -13111,6 +13211,24 @@ function _abrirDetalle(p) {
         location.hash = '#/' + btnPaso.dataset.pasoModulo;
     });
     if (puedeEtiqueta) q('#pdEtiqueta').addEventListener('click', () => _generarEtiqueta(p));
+    q('#pdEnvioBtn').addEventListener('click', () => { cerrar(); if (__X.homologacion) __X.homologacion.abrirEnvio(p.id, _refrescar); });
+    q('#pdRotulo').addEventListener('click', () => { if (__X.homologacion) __X.homologacion.rotuloPedido(p.id); });
+    if (__X.homologacion && servidorDisponible()) {
+        __X.homologacion.cargarEnvios([p.id]).then(function (m) {
+            const e = m[p.id], el = q('#pdEnvio');
+            if (!el) return;
+            el.innerHTML = e && __X.homologacion.dirTiene(e.destinatario) ? '📮 <b>Envío:</b> ' + escH(__X.homologacion.dirResumen(e.destinatario)) : '📮 Sin datos de envío registrados.';
+        });
+    }
+    if (__X.integracionSat && __X.integracionSat.estadoSatelite && servidorDisponible()) {
+        __X.integracionSat.estadoSatelite(p.id).then(function (v) {
+            const el = q('#pdSat');
+            if (!el || !v) return;
+            el.innerHTML = v.sinVinculo ? '🛰️ Satélite: este pedido aún no está vinculado.' : '🛰️ <b>Satélite:</b> ' + escH(v.etapa || '—') + (v.estado ? ' · ' + escH(v.estado) : '') + (v.urlWeb ? ' <a href="#" id="pdAbrirSat">Abrir Satélite</a>' : '');
+            const ab = q('#pdAbrirSat');
+            if (ab) ab.addEventListener('click', function (ev) { ev.preventDefault(); __X.integracionSat.abrirSatelite(); });
+        }).catch(function () {});
+    }
     const btnAPacking = q('#pdAPacking');
     if (btnAPacking) btnAPacking.addEventListener('click', () => { _enviarAPacking(p); cerrar(); });
     const btnADespacho = q('#pdADespacho');
@@ -13150,6 +13268,7 @@ function _cambiarEstado(p, nuevo, nota) {
     }
     _guardar(p);
     toast(nuevo === 'anulado' ? 'Pedido anulado' : `Estado cambiado a ${ESTADO_LABEL[nuevo] || nuevo}`, nuevo === 'anulado' ? 'warning' : 'success');
+    if (nuevo === 'despachado' && p.type === 'despacho') _avisarSatelite(p);
     if (nuevo === 'despachado' || nuevo === 'entregado') {
         registrarDespachoDePedido(p).then(res => {
             if (res) toast(`Pendientes actualizados en factura ${res.factura}`, 'success');
@@ -13209,7 +13328,13 @@ async function _enviarADespacho(p) {
   p.updatedAt = ahora;
   _guardar(p);
   toast(`Pedido enviado a Despacho (fila #${ref.filaCorrelativo})`, 'success');
+  if (p.type === 'despacho') _avisarSatelite(p);
   _refrescar();
+}
+
+function _avisarSatelite(p) {
+  if (!servidorDisponible() || !__X.integracionSat || !__X.integracionSat.avisarDespacho) return;
+  setTimeout(function () { __X.integracionSat.avisarDespacho(p.id, p.id); }, 400);
 }
 
 function _reopen(p) {
@@ -13231,7 +13356,6 @@ function _abrirModalAgregar() {
                 <div><label>Cliente</label><input id="paCustomer"></div>
                 <div><label>Tipo</label><select id="paTipo"><option value="despacho">🚚 Despacho</option><option value="retiro">🏪 Retiro</option></select></div>
                 <div><label>Canal de origen</label><select id="paOrigen"><option value="manual">✍️ Manual</option><option value="mercado_publico">🏛️ Mercado Público</option><option value="shopify">🌐 Web (Shopify)</option></select></div>
-                <!-- NUEVO Tarea A: fecha tope comprometida. NUEVO Tarea D: comuna para agrupar por zona. -->
                 <div><label>Fecha entrega comprometida</label><input type="date" id="paFechaComp"></div>
                 <div><label>Comuna</label><input id="paComuna" placeholder="Ej: Chillán"></div>
             </div>
@@ -13347,10 +13471,43 @@ function _generarReportePedidos(tipo, fmt) {
     toast('Formato no implementado','warn');
 }
 
+__X.pedidoPorId = function (id) { return _pedidos.find(function (p) { return p.id === id; }) || null; };
+__X.pedidosVigentes = function () { return _pedidos.filter(function (p) { return p._eliminado !== true; }); };
+__X.pedidosRefrescar = function () { if (_box && _box.querySelector('#pedGrid')) _refrescar(); };
+__X.pedidoCrear = function (campos, detalle) {
+    const ahora = new Date().toISOString();
+    const nuevo = Object.assign({
+        id: Date.now().toString() + Math.random().toString(36).slice(2, 6), shopifyId: '', customer: '', type: 'despacho', status: 'pendiente', takenBy: null, notes: '', origen: 'manual',
+        etapaActual: 'pedido', packingRef: null, despachoRef: null, fechaEntregaComprometida: null, fechaDespachoReal: null, diasRetraso: 0, multaPotencial: 0, alertaEnviada: false, licitacionId: null,
+        comuna: '', createdAt: ahora, updatedAt: ahora
+    }, campos || {});
+    nuevo.timeline = [{ fecha: ahora, evento: 'creado', usuario: getUsuarioActual() ? getUsuarioActual().nombre : '', detalle: detalle || '' }];
+    nuevo.history = [{ action: detalle || 'Pedido creado', by: getUsuarioActual() ? getUsuarioActual().nombre : '', timestamp: ahora }];
+    asegurarCamposPlazo(nuevo);
+    _pedidos.push(nuevo);
+    _guardar(nuevo);
+    return nuevo;
+};
+__X.pedidoCambiarTipo = function (id, tipo) {
+    const p = _pedidos.find(function (x) { return x.id === id; });
+    if (!p || p.type === tipo || (tipo !== 'retiro' && tipo !== 'despacho')) return false;
+    p.type = tipo; p.updatedAt = new Date().toISOString();
+    (p.history = p.history || []).push({ action: tipo === 'retiro' ? 'Marcado PARA RETIRO' : 'Pasa a despacho', by: getUsuarioActual() ? getUsuarioActual().nombre : '', timestamp: p.updatedAt });
+    _guardar(p); __X.pedidosRefrescar();
+    return true;
+};
+__X.pedidoCambiarComuna = function (id, comuna) {
+    const p = _pedidos.find(function (x) { return x.id === id; });
+    if (!p) return false;
+    p.comuna = comuna; p.updatedAt = new Date().toISOString();
+    _guardar(p);
+    return true;
+};
 __X.renderPedidos = renderPedidos;
 __X.prefiltrarPedidos = function (estado) { _prefiltroEstado = estado || 'todos'; };
 __X.sincronizarPedidosSensible = sincronizarPedidosSensible;
 })();
+
 window.__FIN=(window.__FIN||[]);window.__FIN.push("07c_pedidos");</script>
 
 <script>window.__INICIO=(window.__INICIO||[]);window.__INICIO.push("07d_logistica_resto");
@@ -13922,7 +14079,6 @@ const { renderEscanear } = __X;
 const { renderInventario } = __X;
 const { renderRotulado } = __X;
 const { renderPacking } = __X;
-const { renderDespachos } = __X;
 const { renderPedidos } = __X;
 const { renderCotizador } = __X;
 const { renderPlazos } = __X;
@@ -13941,7 +14097,6 @@ const SUBVISTAS = [
     { id: 'pedidos',    nombre: 'Pedidos',         fnNombre: 'renderPedidos',    listo: true, permiso: 'pedidos:ver' },
     { id: 'packing',    nombre: 'Packing',         fnNombre: 'renderPacking',    listo: true, permiso: 'packing:ver' },
     { id: 'rotulado',   nombre: 'Rotulado',        fnNombre: 'renderRotulado',   listo: true, permiso: 'rotulado:ver' },
-    { id: 'despachos',  nombre: 'Despachos',       fnNombre: 'renderDespachos',  listo: true, permiso: 'despachos:ver' },
     { id: 'seguimiento', nombre: 'Seguimiento',    fnNombre: 'renderSeguimiento', listo: true, permiso: 'logistica:ver_timeline' },
     { id: 'incidencias', nombre: 'Incidencias',    fnNombre: 'renderIncidencias', listo: true, permiso: 'logistica:ver_incidencias' },
     { id: 'cotizador',  nombre: 'Cotizador',       fnNombre: 'renderCotizador',  listo: true, permiso: 'cotizador:ver' },
@@ -13957,8 +14112,9 @@ let _sub = 'pedidos';
 async function renderLogistica(cont) {
     const rol = getRolActual();
     const subUrl = router.subActual();
-    if (subUrl && SUBVISTAS.some(s => s.id === subUrl)) _sub = subUrl;
-    const visibles = SUBVISTAS.filter(s => tienePermiso(rol, s.permiso));
+    const subDestino = subUrl === 'despachos' ? 'packing' : subUrl;
+    if (subDestino && SUBVISTAS.some(s => s.id === subDestino)) _sub = subDestino;
+    const visibles = SUBVISTAS.filter(s => s.id === 'packing' ? (tienePermiso(rol, s.permiso) || tienePermiso(rol, 'despachos:ver')) : tienePermiso(rol, s.permiso));
     if (!visibles.some(s => s.id === _sub)) _sub = visibles[0]?.id;
     const _ctx = contextoDe('logistica', _sub);
     cont.innerHTML = `
@@ -13987,6 +14143,7 @@ async function _pintarSub(cont) {
 
 __X.renderLogistica = renderLogistica;
 })();
+
 window.__FIN=(window.__FIN||[]);window.__FIN.push("07d_logistica_resto");</script>
 <script>window.__INICIO=(window.__INICIO||[]);window.__INICIO.push("08a_cobranza_datos");
 window.__CONTRATOS = (window.__CONTRATOS||[]);window.__CONTRATOS.push({archivo:"08a_cobranza_datos",provee:["cargarTasas","tasas","guardarTasas","restaurarTasasDefault","getUltimaTasa","getTasaAnualMes","calcularInteresesDetallado","verificarCoberturaTasas","totalesGestion","recalcular","importarTasasDesdeFilas","totalesCobranza","tablaDatosTextoCobranza","textoNivelCobranza","construirCorreoCobranza","urlGmail","construirReporteCobranzaHTML","INCUMPLIMIENTOS","textoFundamentos","textoArgumentosDescargos","CAUSALES_DESCARGOS","cargarPersonalizaciones","getPlantilla","guardarPersonalizada","restaurar","tienePersonalizacion","listaPlantillas","cargarPlantillaDesdeArchivo","renderPlantilla","buildDatosLegal","buildDatosDescargos"],requiere:["store","formatCLP"]});
@@ -14704,7 +14861,7 @@ async function cargarEstado() {
                 montoTotal: d.monto || d.montoTotal || 0,
                 interesTotal: d.interesTotal || 0,
                 diasAtraso: d.diasAtraso || 0,
-                seleccionado: false, bitacora: d.bitacora || [],
+                seleccionado: false, bitacora: __X.normalizarBitacora ? __X.normalizarBitacora(d.bitacora) : (d.bitacora || []),
                 enGestion: false, origenCC: true
             });
             nums.add(num);
@@ -17314,6 +17471,7 @@ function _aplicarContactoADeudor(rut, email, tel) {
 __X.abrirContactoCliente = _abrirContactoCliente;
 __X.renderCobranza = renderCobranza;
 })();
+
 window.__FIN=(window.__FIN||[]);window.__FIN.push("08b_cobranza_ui");</script>
 
 
@@ -17338,7 +17496,7 @@ function iso(v){if(!v)return '';if(v instanceof Date)return isNaN(v)?'':v.toISOS
 function hoy(){const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;}
 function fecha(d){return iso(d.vencimiento)||(X.calcularVencimientoCC?X.calcularVencimientoCC(d.fechaEmision,d.plazoVenc||30):'');}
 function dias(d){const f=fecha(d);if(!f)return 0;return Math.max(0,Math.floor((new Date(hoy()+'T12:00:00')-new Date(f+'T12:00:00'))/86400000));}
-function historial(d){let a=d.bitacora||[];if(typeof a==='string'){try{a=JSON.parse(a)}catch(e){a=[]}}return Array.isArray(a)?a:[];}
+function historial(d){if(X.normalizarBitacora)return X.normalizarBitacora(d.bitacora);let a=d.bitacora||[];if(typeof a==='string'){try{a=JSON.parse(a)}catch(e){a=[]}}return Array.isArray(a)?a:[];}
 function plan(d){let p=d.planRecuperacion||{};if(typeof p==='string'){try{p=JSON.parse(p)}catch(e){p={}}}return p&&typeof p==='object'&&!Array.isArray(p)?p:{};}
 function saldo(d){return Number(d.saldo)||0;}
 function segmento(d){const p=plan(d);if(p.segmentoManual&&segmentos[p.segmentoManual])return p.segmentoManual;if(p.alertaSII)return 'sii';if(p.revisionPlazo)return 'plazo';return historial(d).length?'seg':'sin';}
@@ -17441,6 +17599,7 @@ function reporte(imprimir){const cab=cols.map(c=>c[1]),rows=datosReporte(),suma=
 async function renderPlanRecuperacion(cont){host=cont;await X.store.ready();if(!_pag)_pag=await crearPaginador('pag_planrecuperacion');await X.cargar();pintar();}
 X.renderPlanRecuperacion=renderPlanRecuperacion;
 })();
+
 window.__FIN=(window.__FIN||[]);window.__FIN.push("08c_plan_recuperacion");</script>
 
 
@@ -17465,18 +17624,105 @@ function _serializarCC(campos){
     CC_CAMPOS_JSON.forEach(function(c){ if(out[c] !== undefined) out[c] = JSON.stringify(out[c]); });
     return out;
 }
+function _bitFecha(f){
+    if(f instanceof Date) return isNaN(f.getTime()) ? '' : f.toISOString().slice(0, 10);
+    const s = String(f == null ? '' : f).trim();
+    if(!s) return '';
+    if(/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+    const m = s.match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{2,4})/);
+    if(m) return (m[3].length === 2 ? '20' + m[3] : m[3]) + '-' + m[2].padStart(2, '0') + '-' + m[1].padStart(2, '0');
+    return s;
+}
+function _bitObjetoMapa(cuerpo){
+    const o = {};
+    let hubo = false;
+    cuerpo.split(/,\s(?=[A-Za-z_][A-Za-z0-9_]*=)/).forEach(function(p){
+        const i = p.indexOf('=');
+        if(i < 1) return;
+        const k = p.slice(0, i).trim();
+        if(!/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)) return;
+        const v = p.slice(i + 1).trim();
+        o[k] = v === 'null' ? '' : (v === 'true' ? true : (v === 'false' ? false : v));
+        hubo = true;
+    });
+    return hubo ? o : null;
+}
+function _bitDesdeMapa(texto){
+    let t = String(texto || '').trim();
+    if(t.charAt(0) === '[') t = t.replace(/^\[/, '').replace(/\]$/, '').trim();
+    if(t.charAt(0) !== '{') return null;
+    const lista = [];
+    t.replace(/^\{/, '').replace(/\}$/, '').split(/\}\s*,\s*\{/).forEach(function(c){ const o = _bitObjetoMapa(c); if(o) lista.push(o); });
+    return lista.length ? lista : null;
+}
+function _bitTextoPlano(texto){
+    const out = [];
+    String(texto).split(/(?=\d{1,2}[-\/]\d{1,2}[-\/]\d{2,4}\s)/).forEach(function(p){
+        const m = p.trim().match(/^(\d{1,2}[-\/]\d{1,2}[-\/]\d{2,4})\s+([\s\S]*)$/);
+        if(m && m[2].trim()) out.push({ fecha: _bitFecha(m[1]), texto: m[2].trim() });
+    });
+    return out.length ? out : null;
+}
+function normalizarBitacora(v){
+    if(v === null || v === undefined || v === '') return [];
+    let lista = null;
+    if(Array.isArray(v)) lista = v;
+    else if(typeof v === 'object') lista = [v];
+    else if(typeof v === 'string'){
+        const s = v.trim();
+        if(s.charAt(0) === '[' || s.charAt(0) === '{'){
+            try { const j = JSON.parse(s); lista = Array.isArray(j) ? j : (j && typeof j === 'object' ? [j] : null); }
+            catch(e){ lista = _bitDesdeMapa(s); }
+        } else if(/^\d{1,2}[-\/]\d{1,2}[-\/]\d{2,4}\s+\S/.test(s)) lista = _bitTextoPlano(s);
+    }
+    if(!lista) return [];
+    const out = [];
+    lista.forEach(function(e){
+        if(!e || typeof e !== 'object') return;
+        const texto = String(e.texto == null ? '' : e.texto).trim();
+        if(!texto || texto === '0' || texto === 'null' || texto === 'undefined') return;
+        out.push(Object.assign({}, e, { fecha: _bitFecha(e.fecha), texto: texto }));
+    });
+    return out;
+}
+function _listaTolerante(valor){
+    if(Array.isArray(valor)) return { lista: valor, ok: true };
+    if(typeof valor !== 'string' || !valor) return { lista: [], ok: true };
+    try { const j = JSON.parse(valor); return Array.isArray(j) ? { lista: j, ok: true } : { lista: [], ok: false }; }
+    catch(e){ const m = _bitDesdeMapa(valor); return m ? { lista: m, ok: true } : { lista: [], ok: false }; }
+}
 function _deserializarCC(fila){
     const out = Object.assign({}, fila);
     const vacio = function(c){ return (c === 'multaDetalle' || c === 'planRecuperacion') ? null : []; };
     const ilegibles = [];
     CC_CAMPOS_JSON.forEach(function(c){
-        if(typeof out[c] !== 'string' || !out[c]){ out[c] = vacio(c); return; }
-        try { out[c] = JSON.parse(out[c]); }
-        catch(e){ out[c] = vacio(c); ilegibles.push(c); }
+        if(c === 'bitacora'){
+            const crudo = out.bitacora;
+            out.bitacora = normalizarBitacora(crudo);
+            if(!out.bitacora.length && typeof crudo === 'string' && crudo.trim() && !/^(\[\s*\]|\{\s*\})$/.test(crudo.trim())) ilegibles.push(c);
+            return;
+        }
+        if(c === 'multaDetalle' || c === 'planRecuperacion'){
+            if(out[c] && typeof out[c] === 'object') return;
+            if(typeof out[c] !== 'string' || !out[c]){ out[c] = vacio(c); return; }
+            try { out[c] = JSON.parse(out[c]); }
+            catch(e){ out[c] = vacio(c); ilegibles.push(c); }
+            return;
+        }
+        if(typeof out[c] !== 'string' || !out[c]){ out[c] = Array.isArray(out[c]) ? out[c] : []; return; }
+        if(c === 'rutaAreas' && /^[A-Za-zÁÉÍÓÚáéíóúñÑ_ ,]+$/.test(out[c].trim()) && out[c].trim().toLowerCase() !== 'false'){
+            out[c] = out[c].split(',').map(function(x){ return x.trim(); }).filter(Boolean);
+            return;
+        }
+        const r = _listaTolerante(out[c]);
+        out[c] = r.lista;
+        if(!r.ok) ilegibles.push(c);
     });
     if(ilegibles.length){ out._ilegibles = ilegibles; console.warn('[diagnóstico] CC ' + out.id + ': campo(s) ilegible(s) en la nube, no se sobrescribirán: ' + ilegibles.join(', ')); }
     return out;
 }
+__X.normalizarBitacora = normalizarBitacora;
+__X.fechaBitacora = _bitFecha;
 __X.deserializarCC = _deserializarCC;
 __X.serializarCC = _serializarCC;
 function _nuevoIdCC(){ return 'cc-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7); }
@@ -17501,7 +17747,19 @@ async function cargar(){
                 _docs.forEach(function(d){ if(d.id) porId[d.id] = d; });
                 remotos.forEach(function(r){
                     const loc = porId[r.id];
-                    if (!loc || !loc._pendienteSync) porId[r.id] = r;
+                    const remotoIncompleto = !String(r.factura || r.numero || '').trim() && !String(r.rut || '').trim();
+                    const localCompleto = loc && (String(loc.factura || loc.numero || '').trim() || String(loc.rut || '').trim());
+                    if (remotoIncompleto && localCompleto) { loc._pendienteSync = true; return; }
+                    if (!loc || !loc._pendienteSync) {
+                        if (loc && Array.isArray(loc.bitacora) && loc.bitacora.length) {
+                            const vistos = {};
+                            const base = Array.isArray(r.bitacora) ? r.bitacora : [];
+                            base.forEach(function(e){ vistos[String(e.fecha) + '|' + String(e.texto)] = true; });
+                            const faltan = loc.bitacora.filter(function(e){ return e && e.texto && !vistos[String(e.fecha) + '|' + String(e.texto)]; });
+                            if (faltan.length) { r.bitacora = base.concat(faltan); loc._pendienteSync = false; }
+                        }
+                        porId[r.id] = r;
+                    }
                 });
                 _docs = Object.keys(porId).map(function(k){ return porId[k]; });
                 store.guardarLista(KEY, _docs);
@@ -17511,7 +17769,11 @@ async function cargar(){
             console.error('CC.cargar(): fallo la descarga desde la nube —', _ultimoErrorSyncCC);
         }
     }
-    _docs = _docs.filter(function(d){ return d._eliminado !== true; });
+    _docs = _docs.filter(function(d){
+        if (d._eliminado === true) return false;
+        const sinIdentidad = !String(d.factura || d.numero || '').trim() && !String(d.rut || '').trim();
+        return !sinIdentidad;
+    });
     _docs.forEach(function(d){
         try { recalcularDocCC(d); }
         catch(e) { console.error('recalcularDocCC fallo para', d && d.id, e.message); }
@@ -17550,6 +17812,10 @@ async function cambiarEstadoCC(doc, campo, valorNuevo, usuario, valorEsperadoMan
             guardar();
             return { ok:false, conflicto:true, actual };
         }
+        if (r && r.inexistente) {
+            const sube = {}; sube[campo] = valorNuevo;
+            return fusionarCamposCC(doc, Object.assign({}, doc, sube), usuario, true);
+        }
         toast('No se pudo cambiar el estado: ' + ((r && r.error) || 'error desconocido'), 'error');
         return { ok:false };
     } catch(e) {
@@ -17561,7 +17827,7 @@ async function cambiarEstadoCC(doc, campo, valorNuevo, usuario, valorEsperadoMan
     }
 }
 
-async function fusionarCamposCC(doc, campos, usuario){
+async function fusionarCamposCC(doc, campos, usuario, _reintentoCompleto){
     if(!doc.id) doc.id = _nuevoIdCC();
     if (!servidorDisponible()) { Object.assign(doc, campos); doc._pendienteSync = true; guardar(); return { ok:true, offline:true }; }
     try {
@@ -17569,9 +17835,18 @@ async function fusionarCamposCC(doc, campos, usuario){
         if (r && r.ok) { Object.assign(doc, campos); doc.actualizado = new Date().toISOString(); doc._pendienteSync = false; guardar(); return { ok:true }; }
         if (r && r.masReciente) {
             const actual = _deserializarCC(r.actual);
+            const nubeIncompleta = !String(actual.factura || actual.numero || '').trim() && !String(actual.rut || '').trim();
+            const localCompleto = String(doc.factura || doc.numero || '').trim() || String(doc.rut || '').trim();
+            if (nubeIncompleta && localCompleto && !_reintentoCompleto) {
+                doc.actualizado = '';
+                return fusionarCamposCC(doc, Object.assign({}, doc, campos), usuario, true);
+            }
             toast('Alguien mas ya habia actualizado este documento; se muestran los datos mas recientes', 'warn', 7000);
             Object.assign(doc, actual); doc._pendienteSync = false; recalcularDocCC(doc); guardar();
             return { ok:false, masReciente:true };
+        }
+        if (r && r.inexistente && !_reintentoCompleto) {
+            return fusionarCamposCC(doc, Object.assign({}, doc, campos), usuario, true);
         }
         return { ok:false };
     } catch(e) {
@@ -18071,7 +18346,7 @@ async function abrirBitacora(doc, host, onChange){
             const clave = o => (o.fecha || '') + '|' + (o.texto || '');
             const yaLocal = new Set(locales.map(clave));
             (remotas || []).forEach(function (r) {
-                const entrada = { fecha: r.fecha ? r.fecha.split('T')[0] : '', texto: r.texto, usuario: r.usuario };
+                const entrada = { fecha: __X.fechaBitacora((r.extra && r.extra.fecha) || r.fecha), texto: r.texto, usuario: r.usuario };
                 if (!yaLocal.has(clave(entrada))) { locales.push(entrada); yaLocal.add(clave(entrada)); }
             });
             doc.bitacora = locales;
@@ -20577,6 +20852,7 @@ async function abrirPagoMasivoCC(host, onChange) {
 
 __X.abrirPagoMasivoCC = abrirPagoMasivoCC;
 })();
+
 window.__FIN=(window.__FIN||[]);window.__FIN.push("09a_finanzas");</script>
 
 
@@ -21750,7 +22026,7 @@ function _gestionRMA(box) {
                 '<td>' + escH(c.cliente || '') + '</td>' +
                 '<td>' + escH(c.marca || '') + ' ' + escH(c.modelo || '') + '</td>' +
                 '<td><span class="badge" style="background:' + (e.color || '#94a3b8') + ';color:#fff;">' + escH(e.label) + '</span></td>' +
-                '<td>' + escH(c.proveedor || '—') + '</td>' +
+                '<td>' + escH(_nombreProvCaso(c) || '—') + '</td>' +
                 '<td><span class="badge ' + (c.garantiaVigente ? 'badge-green' : 'badge-red') + '">' + (c.garantiaVigente ? 'Vigente' : 'Vencida') + '</span></td>' +
                 '<td style="white-space:nowrap;">' +
                 (['en_rma','retornado_proveedor'].indexOf(c.estado) !== -1 ?
@@ -21800,17 +22076,17 @@ function _gestionRMA(box) {
         var filas = lista.map(c =>
             '<tr><td>'+escH(c.numero||'')+'</td><td>'+escH(c.cliente||'')+'</td>'+
             '<td>'+escH((c.marca||'')+' '+(c.modelo||''))+'</td>'+
-            '<td>'+escH(c.estado||'')+'</td><td>'+escH(c.proveedor||'—')+'</td>'+
+            '<td>'+escH(c.estado||'')+'</td><td>'+escH((c.rma&&c.rma.numeroRMA)||'—')+'</td><td>'+escH(_nombreProvCaso(c)||'—')+'</td>'+
             '<td>'+(c.garantiaVigente?'Vigente':'Vencida')+'</td></tr>').join('');
         var html = '<h1 style="text-align:center;">RMA · '+escH(tipo)+'</h1>'+
             '<p style="text-align:center;">'+fecha+' · '+lista.length+' caso(s)</p>'+
             '<table border="1" style="width:100%;border-collapse:collapse;font-size:10pt;">'+
-            '<thead style="background:#1e40af;color:#fff;"><tr><th>N°</th><th>Cliente</th><th>Producto</th><th>Estado</th><th>Proveedor</th><th>Garantía</th></tr></thead>'+
+            '<thead style="background:#1e40af;color:#fff;"><tr><th>N°</th><th>Cliente</th><th>Producto</th><th>Estado</th><th>ID RMA</th><th>Proveedor</th><th>Garantía</th></tr></thead>'+
             '<tbody>'+filas+'</tbody></table>'+
             '<p style="font-size:9pt;color:#666;margin-top:10pt;">Gestor RD Musico · '+fecha+'</p>';
         if (fmt === 'pdf' && __X.imprimirDocumento) { __X.imprimirDocumento({titulo:'RMA',contenido:html}); return; }
         if (fmt === 'excel' && typeof XLSX !== 'undefined') {
-            var ws = XLSX.utils.json_to_sheet(lista.map(c => ({'N°':c.numero,Cliente:c.cliente,Producto:(c.marca||'')+' '+(c.modelo||''),Estado:c.estado,Proveedor:c.proveedor||'',Garantia:c.garantiaVigente?'Vigente':'Vencida'})));
+            var ws = XLSX.utils.json_to_sheet(lista.map(c => ({'N°':c.numero,Cliente:c.cliente,Producto:(c.marca||'')+' '+(c.modelo||''),Estado:c.estado,'ID RMA':(c.rma&&c.rma.numeroRMA)||'',Proveedor:_nombreProvCaso(c),Garantia:c.garantiaVigente?'Vigente':'Vencida'})));
             var wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'RMA'); XLSX.writeFile(wb, 'rma.xlsx'); return;
         }
         toast('Formato no disponible','warn');
@@ -22177,7 +22453,7 @@ function _detalle(id, ext) {
     var nombreU = u2 ? u2.nombre : '';
     var _b = (sel, fn) => { var el = q(sel); if (el) el.addEventListener('click', fn); };
 
-    _b('#pvImprimir', () => _ordenServicio(c));
+    _b('#pvImprimir', () => _ordenServicio(c, host));
     _b('#pvDocs',     () => _selectorDocumento(c, host, nombreU));
     _b('#pvCorreo',   () => {
         var tipo = c.estado === 'rechazado' ? 'rechazo' : 'aprobacion';
@@ -22209,6 +22485,7 @@ function _detalle(id, ext) {
     });
 
     _b('#rmaFormulario', () => _documento(c, 'pv-rma', nombreU));
+    _b('#rmaOrden', () => _ordenServicio(c, host));
 
     var refrescarEvid = () => {
         var cc = obtenerCaso(c.id);
@@ -22297,6 +22574,7 @@ function _panelRMA(c, conObs) {
         '<div class="output-bar">' +
             '<button class="btn-secondary btn-sm" id="rmaGuardarCompra">💾 Registrar compra y validar</button>' +
             '<button class="btn-outline btn-sm" id="rmaFormulario">📄 Formulario RMA</button>' +
+            '<button class="btn-outline btn-sm" id="rmaOrden">🖨️ Orden de servicio</button>' +
         '</div>' +
         (conObs ? '<div style="margin-top:8px;"><label>Observaciones administración</label>' +
             '<textarea id="pvObs" rows="2">' + escH(c.obsAdmin || '') + '</textarea></div>' : '') +
@@ -22484,10 +22762,46 @@ function _modalProveedor(p, alGuardar, box, alCancelar) {
     });
 }
 
-function _ordenServicio(c) {
+function _nombreProvCaso(c) {
+    var id = (c.rma && c.rma.proveedorId) || c.proveedor || '';
+    var p = null;
+    try { if (id && typeof buscarProveedorPV === 'function') p = buscarProveedorPV(id); } catch (err) {}
+    return p ? (p.nombre || '') : (c.proveedor || '');
+}
+
+function _datosAdminOrden(c, host) {
+    var r = c.rma || {};
+    var vivo = function(id) { var el = host && host.querySelector ? host.querySelector(id) : null; return el ? String(el.value || '').trim() : ''; };
+    var provId = vivo('#rmaProv');
+    if (provId === '__nuevo__') provId = '';
+    provId = provId || r.proveedorId || c.proveedor || '';
+    var prov = null;
+    try { if (provId && typeof buscarProveedorPV === 'function') prov = buscarProveedorPV(provId); } catch (err) {}
+    var nombre = prov ? (prov.nombre || '') : (c.proveedor || '');
+    var rut = vivo('#rmaProvRut') || (prov ? (prov.rut || '') : (r.rutProveedor || ''));
+    return {
+        idRMA: r.numeroRMA || '',
+        proveedor: nombre,
+        rutProveedor: rut,
+        factura: vivo('#rmaFactura') || r.facturaCompra || '',
+        fechaCompra: vivo('#rmaFechaCompra') || r.fechaCompra || '',
+        oc: vivo('#rmaOC') || r.ordenCompra || '',
+        guia: r.guiaDespacho || '',
+        transportista: r.transportista || '',
+        fechaEnvio: r.fechaEnvio || ''
+    };
+}
+
+function _ordenServicio(c, host) {
     var win = window.open('', '_blank', 'width=900,height=700');
     if (!win) { toast('Permite las ventanas emergentes', 'error'); return; }
     var e = ESTADOS_PV[c.estado];
+    var ad = _datosAdminOrden(c, host);
+    var filaAdmin = '';
+    if (ad.idRMA) filaAdmin += '<tr><td><b>ID / N° RMA</b></td><td>' + escH(ad.idRMA) + '</td></tr>';
+    if (ad.proveedor || ad.rutProveedor) filaAdmin += '<tr><td><b>Proveedor</b></td><td>' + escH(ad.proveedor || '—') + (ad.rutProveedor ? ' · RUT ' + escH(ad.rutProveedor) : '') + '</td></tr>';
+    if (ad.factura || ad.oc) filaAdmin += '<tr><td><b>Compra al proveedor</b></td><td>' + (ad.factura ? 'Factura ' + escH(ad.factura) : '') + (ad.fechaCompra ? ' · ' + escH(ad.fechaCompra) : '') + (ad.oc ? ' · O/C ' + escH(ad.oc) : '') + '</td></tr>';
+    if (ad.guia || ad.transportista || ad.fechaEnvio) filaAdmin += '<tr><td><b>Envío al proveedor</b></td><td>' + escH(ad.fechaEnvio || '—') + ' · Guía ' + escH(ad.guia || '—') + ' · ' + escH(ad.transportista || '—') + '</td></tr>';
     win.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>Orden de Servicio ' + escH(c.numero) + '</title>' +
         '<style>@page{size:A4;margin:2cm;}body{font-family:Arial,Helvetica,sans-serif;font-size:11pt;color:#111;}' +
         '.cab{display:flex;justify-content:space-between;border-bottom:2.5pt solid #1e40af;padding-bottom:8pt;margin-bottom:14pt;}' +
@@ -22502,7 +22816,7 @@ function _ordenServicio(c) {
         '<table><tbody>' +
         '<tr><td style="width:28%"><b>Cliente</b></td><td>' + escH(c.cliente) + ' ' + escH(c.rut || '') + '</td></tr>' +
         '<tr><td><b>Contacto</b></td><td>' + escH(c.telefono || '—') + ' · ' + escH(c.correo || '—') + '</td></tr>' +
-        '<tr><td><b>Producto</b></td><td>' + escH(c.marca) + ' ' + escH(c.modelo) + ' · Serie: ' + escH(c.serie || '—') + '<br>' + escH(c.descripcion || '') + '</td></tr>' +
+        '<tr><td><b>Producto</b></td><td>' + (c.sku ? 'ID/SKU ' + escH(c.sku) + ' · ' : '') + escH(c.marca) + ' ' + escH(c.modelo) + ' · Serie: ' + escH(c.serie || '—') + '<br>' + escH(c.descripcion || '') + '</td></tr>' +
         '<tr><td><b>Documento de venta</b></td><td>' + escH(c.tipoDoc || '—') + ' ' + escH(c.numeroDoc || '') + ' · ' + escH(c.fechaVenta || '—') + '</td></tr>' +
         '<tr><td><b>Garantía</b></td><td>' + (c.garantiaVigente ? 'VIGENTE' : 'VENCIDA') + ' — ' + escH(c.garantiaDetalle || '') + '</td></tr>' +
         '<tr><td><b>Tipo de solicitud</b></td><td>' + escH(c.tipoSolicitud || '—') + '</td></tr>' +
@@ -22511,6 +22825,8 @@ function _ordenServicio(c) {
         '<tr><td><b>Accesorios</b></td><td>' + escH(c.accesorios || 'Ninguno') + '</td></tr>' +
         '<tr><td><b>Motivo del cliente</b></td><td>' + escH(c.motivoCliente || '—') + '</td></tr>' +
         (c.diagnostico ? '<tr><td><b>Diagnóstico</b></td><td>' + escH(c.diagnostico) + '</td></tr>' : '') +
+        (c.obsAdmin ? '<tr><td><b>Observaciones administración</b></td><td>' + escH(c.obsAdmin) + '</td></tr>' : '') +
+        filaAdmin +
         '</tbody></table>' +
         '<div class="firmas"><div class="firma">Recibí conforme (Cliente)</div><div class="firma">Responsable Post Venta</div></div>' +
         '<script>setTimeout(function(){window.print();},300);<\/script>' +
@@ -22865,7 +23181,9 @@ function _miniatura(ev, conBorrar) {
 
 __X.renderPostVenta = renderPostVenta;
 __X.modalGestionRMA = _modalGestionRMA;
+__X.ordenServicioPV = _ordenServicio;
 })();
+
 window.__FIN=(window.__FIN||[]);window.__FIN.push("09d_postventa");</script>
 
 
@@ -26974,6 +27292,13 @@ async function _renderDiagnostico(box) {
         <div class="page-subtitle">Compara específicamente <b>CC_Documentos</b> (la fuente oficial actual) contra <b>cuentas_corrientes</b> (la hoja histórica, que se conserva como respaldo).</div>
         <div class="toolbar"><button class="btn-outline btn-sm" id="diagFuentesCC">🔍 Comparar fuentes de Cuentas Corrientes</button></div>
         <div id="diagResultadoCC" style="margin-top:12px;"></div>
+    </div>
+    <div class="section">
+        <h2>Cuentas Corrientes: reparación integral</h2>
+        <div class="page-subtitle">Corrige filas guardadas con un orden de columnas antiguo, bitácoras en formato ilegible, documentos repetidos y registros incompletos. «Revisar» no modifica nada. «Reparar» primero crea una copia de la hoja dentro de la misma planilla.</div>
+        <div class="toolbar"><label style="font-size:13px;"><input type="checkbox" id="diagRepDup"> Fusionar repetidos idénticos</label> <label style="font-size:13px;"><input type="checkbox" id="diagRepHuer"> Archivar registros incompletos</label></div>
+        <div class="toolbar"><button class="btn-outline btn-sm" id="diagRepRevisar">🔍 Revisar</button> <button class="btn-primary btn-sm" id="diagRepReparar">🛠️ Reparar</button></div>
+        <div id="diagResultadoRep" style="margin-top:12px;"></div>
     </div>`;
 
 
@@ -27001,6 +27326,53 @@ async function _renderDiagnostico(box) {
 
         zona.querySelectorAll('.diagDescargar').forEach(btn => btn.addEventListener('click', () => _diagDescargarNube(btn.dataset.cat)));
         zona.querySelectorAll('.diagSubir').forEach(btn => btn.addEventListener('click', () => _diagSubirLocal(btn.dataset.cat)));
+    });
+
+    const _repInforme = (zona, r, f) => {
+        const fila = (t, v) => `<tr><td>${t}</td><td style="text-align:right">${v}</td></tr>`;
+        const lay = Object.keys(r.layouts || {}).map(k => k + ' (' + r.layouts[k] + ')').join(' · ');
+        const d = r.duplicados || {};
+        const pv = Object.keys((f && f.hojas) || {}).map(k => k + ': ' + f.hojas[k].porReparar + ' celda(s)').join(' · ');
+        const manual = (d.detalleManual || []).slice(0, 12).map(g => escH(g.documento + ' · ' + g.rut + ' · $' + g.monto) + ' → ' + g.copias.map(c => escH(c.id + ' pagos ' + c.pagos)).join(' | ')).join('<br>');
+        zona.innerHTML = `<table><tbody>
+            ${fila('Filas revisadas', r.filas)}
+            ${fila('Orden de columnas detectado', escH(lay || '—'))}
+            ${fila('Filas ' + (r.aplicado ? 'realineadas' : 'por realinear'), r.realineadas)}
+            ${fila('Celdas ajenas a su columna limpiadas', r.celdasLimpiadas)}
+            ${fila('Listas ilegibles convertidas', r.listasConvertidas)}
+            ${fila('Listas con dato original perdido', r.listasPerdidas)}
+            ${fila('Entradas de bitácora rescatadas', r.entradasBitacora)}
+            ${fila('Registros incompletos (sin N° ni RUT)', r.huerfanas + (r.huerfanasArchivadas ? ' · archivados: ' + r.huerfanasArchivadas : ''))}
+            ${fila('Grupos de documentos repetidos', d.grupos || 0)}
+            ${fila('Repetidos idénticos (se pueden fusionar)', d.equivalentes || 0)}
+            ${fila('Repetidos con pagos distintos (decisión humana)', d.manuales || 0)}
+            ${fila('Copia de respaldo', escH(r.respaldo || '—'))}
+        </tbody></table>
+        ${manual ? '<div class="warn" style="margin-top:8px;">Revisar a mano: <br>' + manual + '</div>' : ''}
+        ${pv ? '<div class="info" style="margin-top:8px;">Post Venta con formato ilegible: ' + escH(pv) + '</div>' : ''}`;
+    };
+    const _repOpciones = (aplicar) => ({
+        aplicar,
+        duplicados: !!box.querySelector('#diagRepDup')?.checked,
+        huerfanos: !!box.querySelector('#diagRepHuer')?.checked
+    });
+    box.querySelector('#diagRepRevisar').addEventListener('click', async () => {
+        const zona = box.querySelector('#diagResultadoRep');
+        zona.innerHTML = '<div class="info">⏳ Revisando…</div>';
+        try { _repInforme(zona, await llamar('apiCCReparar', _repOpciones(false)), await llamar('apiReparacionFormatos', false)); }
+        catch (e) { zona.innerHTML = '<div class="warn">' + escH(e.message) + '</div>'; }
+    });
+    box.querySelector('#diagRepReparar').addEventListener('click', async () => {
+        if (!confirm('Se creará una copia de la hoja CC_Documentos y luego se reescribirán las filas afectadas. ¿Continuar?')) return;
+        const zona = box.querySelector('#diagResultadoRep');
+        zona.innerHTML = '<div class="info">⏳ Reparando…</div>';
+        try {
+            const r = await llamar('apiCCReparar', _repOpciones(true));
+            const f = await llamar('apiReparacionFormatos', true);
+            _repInforme(zona, r, f);
+            if (__X.cargar) await __X.cargar();
+            toast(r.escritas + ' fila(s) reparada(s)', 'success');
+        } catch (e) { zona.innerHTML = '<div class="warn">' + escH(e.message) + '</div>'; }
     });
 
     box.querySelector('#diagFuentesCC').addEventListener('click', async () => {
@@ -27625,6 +27997,7 @@ window.addEventListener('error', function (ev) {
 
 
 })();
+
 window.__FIN=(window.__FIN||[]);window.__FIN.push("10_admin_app");</script>
 
 
@@ -28299,6 +28672,1184 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 __X.asistente = { abrir: abrir, buscar: buscar, base: function () { return BASE.slice(); } };
 })();
 window.__FIN=(window.__FIN||[]);window.__FIN.push("11_asistente");</script>
+<script>window.__INICIO=(window.__INICIO||[]);window.__INICIO.push("12_satelite_ui");
+(function(){
+'use strict';
+const { escH, escAttr, toast, store } = __X;
+
+const KEY_PED = 'shopify_pedidos';
+const KEY_OVR = 'cotizador_dimensiones_override';
+const KEY_SEG = 'int_sat_seguimiento';
+const RANGO = { pendiente: 0, preparacion: 1, listo: 2, despachado: 3, entregado: 4 };
+const ESTADOS = ['pendiente', 'preparacion', 'listo', 'despachado', 'entregado'];
+const ESTADO_LABEL = { pendiente: 'Pendiente', preparacion: 'En preparación', listo: 'Listo', despachado: 'Despachado', entregado: 'Entregado', anulado: 'Anulado' };
+const OPCION_MENU = { nombre: 'Satélite', icono: '🛰️', modulo: 'satelite', sub: null, permiso: 'logistica:ver' };
+
+let _box = null;
+let _est = null;
+let _vista = null;
+let _seg = [];
+let _log = [];
+let _ocupado = false;
+let _temporizador = null;
+let _ultimoAuto = 0;
+let _vistaTs = 0;
+
+function rol() { return __X.getRolActual(); }
+function puede(p) { return !p || __X.tienePermisoGranular(rol(), p); }
+function admin() { return puede('admin:configurar_cloud'); }
+function nube() { return typeof __X.servidorDisponible === 'function' && __X.servidorDisponible(); }
+function usuario() { const u = __X.getUsuarioActual ? __X.getUsuarioActual() : null; return (u && u.nombre) || ''; }
+function ahoraTxt() { return new Date().toLocaleString('es-CL', { hour12: false }); }
+function anotar(t) { _log.unshift(ahoraTxt() + ' · ' + t); _log = _log.slice(0, 40); }
+function fechaCorta(iso) { if (!iso) return '—'; const d = new Date(iso); return isNaN(d.getTime()) ? String(iso) : d.toLocaleString('es-CL', { hour12: false, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); }
+
+function serializarPedido(p) {
+  const o = Object.assign({}, p);
+  ['history', 'timeline'].forEach(function (c) { if (o[c] !== undefined) o[c] = JSON.stringify(o[c]); });
+  return o;
+}
+
+function estadoNorm(e) { return String(e || '').toLowerCase(); }
+
+async function aplicarPaso(p, nuevo, etapa) {
+  const ahora = new Date().toISOString();
+  const r = rol();
+  p.status = nuevo;
+  (p.history = p.history || []).push({ action: (ESTADO_LABEL[nuevo] || nuevo) + ' (automático desde Satélite)', by: 'Satélite', timestamp: ahora });
+  if ((nuevo === 'preparacion' || nuevo === 'listo') && !p.takenBy) p.takenBy = r;
+  if (etapa) p.etapaActual = etapa;
+  p.updatedAt = ahora;
+  if (typeof __X.registrarEvento === 'function') __X.registrarEvento(p, nuevo, 'Satélite');
+  try {
+    if (typeof __X.ajustarReserva === 'function') {
+      if (nuevo === 'preparacion') await __X.ajustarReserva(p, 'reservar');
+      else if (nuevo === 'despachado' || nuevo === 'entregado') { if (!p._salidaConfirmada) { p._salidaConfirmada = true; await __X.ajustarReserva(p, 'confirmar'); } }
+      else if (nuevo === 'anulado') await __X.ajustarReserva(p, 'liberar');
+    }
+  } catch (e) {}
+  if (nuevo === 'despachado' || nuevo === 'entregado') {
+    try {
+      if (typeof __X.registrarDespachoPlazo === 'function') {
+        await __X.registrarDespachoPlazo(p, p.montoTotal || p.monto || 0);
+        if (p.diasRetraso > 0) {
+          p.history.push({ action: 'Retraso de ' + p.diasRetraso + ' días en el despacho', by: 'Satélite', timestamp: new Date().toISOString() });
+          if (typeof __X.registrarEvento === 'function') __X.registrarEvento(p, 'retraso', p.diasRetraso + ' día(s)');
+        }
+      }
+    } catch (e) {}
+    try { if (typeof __X.registrarDespachoDePedido === 'function') await __X.registrarDespachoDePedido(p); } catch (e) {}
+  }
+}
+
+async function aplicarCambiosPedidos(cambios) {
+  if (!cambios || !cambios.length) return 0;
+  const lista = await store.lista(KEY_PED);
+  let n = 0;
+  const tocados = [];
+  for (const c of cambios) {
+    const p = lista.find(function (x) { return x.id === c.id; });
+    if (!p) continue;
+    const actual = estadoNorm(p.status);
+    if (c.estado === 'anulado') {
+      if (actual === 'anulado' || actual === 'entregado' || actual === 'despachado') continue;
+      await aplicarPaso(p, 'anulado', p.etapaActual);
+      n++; tocados.push(p);
+      continue;
+    }
+    const desde = RANGO[actual];
+    const hasta = RANGO[c.estado];
+    if (desde === undefined || hasta === undefined || hasta <= desde) continue;
+    for (let r = desde + 1; r <= hasta; r++) {
+      await aplicarPaso(p, ESTADOS[r], r === hasta ? c.etapa : p.etapaActual);
+    }
+    n++; tocados.push(p);
+  }
+  if (tocados.length) {
+    await store.guardarLista(KEY_PED, lista);
+    const u = usuario();
+    for (const p of tocados) {
+      try { await __X.llamar('apiFusionarRegistroSensible', 'pedidos', p.id, serializarPedido(p), p.updatedAt, u || 'Satélite'); } catch (e) {}
+    }
+  }
+  return n;
+}
+
+async function sincronizarPedidos() {
+  const res = await __X.llamar('apiIntegracionPedidos', { usuario: usuario() });
+  try { if (typeof __X.sincronizarPedidosSensible === 'function') await __X.sincronizarPedidosSensible(); } catch (e) {}
+  const aplicados = await aplicarCambiosPedidos(res.cambiosERP);
+  if (aplicados && typeof __X.sincronizarPedidosSensible === 'function') { try { await __X.sincronizarPedidosSensible(); } catch (e) {} }
+  res.aplicados = aplicados;
+  anotar('Pedidos: ' + res.vinculadosAuto + ' vinculados, ' + res.creadosEnERP + ' traídos de Satélite, ' + res.creadosEnSatelite + ' enviados a Satélite, ' + aplicados + ' estados actualizados' + (res.revisar.length ? ', ' + res.revisar.length + ' por revisar' : '') + (res.conflictos.length ? ', ' + res.conflictos.length + ' conflicto(s)' : ''));
+  return res;
+}
+
+function cmpMedida(m) { return [m.ancho, m.alto, m.largo, m.peso, m.anchoProd, m.altoProd, m.largoProd, m.pesoProd, m.actualizado].join('|'); }
+
+function dimensionesDe(m) {
+  if (m.anchoProd > 0 && m.altoProd > 0 && m.largoProd > 0 && m.pesoProd > 0) return { ancho: m.anchoProd, alto: m.altoProd, largo: m.largoProd, peso: m.pesoProd, tipo: 'producto' };
+  if (m.bultos <= 1 && m.ancho > 0 && m.alto > 0 && m.largo > 0 && m.peso > 0) return { ancho: m.ancho, alto: m.alto, largo: m.largo, peso: m.peso, tipo: 'bulto' };
+  return null;
+}
+
+async function mezclarMedidas(medidas) {
+  if (!medidas || !medidas.length) return { aplicadas: 0, conservadas: 0 };
+  const ledger = await __X.llamar('apiIntegracionLedgerLeer', 'medida');
+  const ovr = (await store.get(KEY_OVR, {})) || {};
+  const nuevoLedger = {};
+  let aplicadas = 0, conservadas = 0;
+  medidas.forEach(function (m) {
+    const sig = cmpMedida(m);
+    if (ledger[m.codigo] === sig) return;
+    const d = dimensionesDe(m);
+    nuevoLedger[m.codigo] = sig;
+    if (!d) return;
+    const prev = ovr[m.codigo];
+    const manual = prev && prev.origen !== 'satelite';
+    if (manual && String(prev.actualizado || '') > String(m.actualizado || '')) { conservadas++; return; }
+    ovr[m.codigo] = { alto: d.alto, ancho: d.ancho, largo: d.largo, peso: d.peso, actualizado: m.actualizado || new Date().toISOString(), origen: 'satelite', medida: d.tipo };
+    aplicadas++;
+  });
+  if (aplicadas) {
+    await store.set(KEY_OVR, ovr);
+    if (__X.subirBlobResto) __X.subirBlobResto('cotizador_overrides', ovr);
+    if (__X.cargarConfigCotizador) { try { await __X.cargarConfigCotizador(); } catch (e) {} }
+  }
+  if (Object.keys(nuevoLedger).length) await __X.llamar('apiIntegracionLedgerGuardar', 'medida', nuevoLedger);
+  return { aplicadas: aplicadas, conservadas: conservadas };
+}
+
+function normUb(v) { return String(v == null ? '' : v).replace(/\s+/g, ' ').trim().toUpperCase(); }
+
+async function mezclarUbicaciones(datos) {
+  const sat = {};
+  (datos.ubicaciones || []).forEach(function (u) { sat[u.codigo] = normUb(u.ubicacion); });
+  const enCatalogo = {};
+  (datos.codigosCatalogo || []).forEach(function (c) { enCatalogo[c] = true; });
+  const ledger = await __X.llamar('apiIntegracionLedgerLeer', 'ubicacion');
+  const productos = typeof __X.productos === 'function' ? __X.productos() : [];
+  const cambiosErp = [];
+  const haciaSat = [];
+  const nuevoLedger = {};
+  let conflictos = 0;
+  productos.forEach(function (p) {
+    const cod = p.codigo;
+    const S = sat[cod] || '';
+    const E = normUb(p.ubicacion);
+    const L = ledger[cod] !== undefined ? normUb(ledger[cod]) : null;
+    if (S === E) { if (S && L !== S) nuevoLedger[cod] = S; return; }
+    if (S && !E) { cambiosErp.push([cod, { ubicacion: S }]); nuevoLedger[cod] = S; return; }
+    if (E && !S) { if (enCatalogo[cod]) haciaSat.push({ codigo: cod, ubicacion: E, base: '' }); return; }
+    if (L !== null && S === L && E !== L) { haciaSat.push({ codigo: cod, ubicacion: E, base: S }); return; }
+    if (L !== null && E === L && S !== L) { cambiosErp.push([cod, { ubicacion: S }]); nuevoLedger[cod] = S; return; }
+    conflictos++;
+    cambiosErp.push([cod, { ubicacion: S }]);
+    nuevoLedger[cod] = S;
+  });
+  if (cambiosErp.length && typeof __X.patchProductosMasivo === 'function') await __X.patchProductosMasivo(cambiosErp);
+  let enviadas = 0, rechazadas = 0;
+  const u = usuario() || 'ERP';
+  for (const h of haciaSat.slice(0, 200)) {
+    try {
+      const r = await __X.llamar('apiIntegracionProductoSatelite', { codigo: h.codigo, cambios: { ubicacion: h.ubicacion }, base: { ubicacion: h.base }, usuario: u });
+      if (r && r.ok) { enviadas++; nuevoLedger[h.codigo] = h.ubicacion; } else rechazadas++;
+    } catch (e) { rechazadas++; }
+  }
+  if (Object.keys(nuevoLedger).length) await __X.llamar('apiIntegracionLedgerGuardar', 'ubicacion', nuevoLedger);
+  return { enErp: cambiosErp.length, haciaSatelite: enviadas, rechazadas: rechazadas, conflictos: conflictos };
+}
+
+async function sincronizarDatos() {
+  const d = await __X.llamar('apiIntegracionDatos', { medidas: true, ubicaciones: true, seguimiento: true });
+  const m = await mezclarMedidas(d.medidas);
+  const u = await mezclarUbicaciones(d);
+  _seg = d.seguimiento || [];
+  try { await store.set(KEY_SEG, { lista: _seg, guardado: new Date().toISOString() }); } catch (e) {}
+  anotar('Datos: ' + m.aplicadas + ' medidas de Satélite al cotizador' + (m.conservadas ? ' (' + m.conservadas + ' ajustes del ERP más recientes se conservaron)' : '') + ', ' + u.enErp + ' ubicaciones al ERP, ' + u.haciaSatelite + ' a Satélite' + (u.conflictos ? ', ' + u.conflictos + ' diferencias resueltas a favor de Satélite' : '') + (u.rechazadas ? ', ' + u.rechazadas + ' rechazadas por cambio previo en Satélite' : '') + ', ' + _seg.length + ' seguimientos');
+  return { medidas: m, ubicaciones: u, seguimiento: _seg.length };
+}
+
+async function sincronizarOT() {
+  const r = await __X.llamar('apiSateliteSincronizar', { usuario: usuario() });
+  anotar('OT y bultos: ' + r.importadas + ' OT importadas, ' + r.bultos + ' bultos' + (r.catalogo != null ? ', catálogo enviado conservando ubicaciones (' + r.catalogo + ')' : ''));
+  return r;
+}
+
+async function sincronizarTodo(silencioso) {
+  if (_ocupado) return null;
+  if (!nube()) { if (!silencioso) toast('Sin conexión con la nube', 'warn'); return null; }
+  _ocupado = true;
+  pintar();
+  const out = {};
+  const pasos = [['pedidos', sincronizarPedidos], ['datos', sincronizarDatos], ['ot', sincronizarOT]];
+  for (const par of pasos) {
+    try { out[par[0]] = await par[1](); }
+    catch (e) { anotar('⚠ ' + par[0] + ': ' + ((e && e.message) || e)); out[par[0] + 'Error'] = (e && e.message) || String(e); if (par[0] === 'pedidos' && /Falta configurar/.test(out.pedidosError)) break; }
+  }
+  _ocupado = false;
+  _ultimoAuto = Date.now();
+  await cargarVista();
+  pintar();
+  if (!silencioso) {
+    const err = Object.keys(out).filter(function (k) { return /Error$/.test(k); });
+    toast(err.length ? 'Sincronización con avisos: revisa el detalle en la pantalla Satélite' : 'Satélite sincronizado', err.length ? 'warn' : 'success');
+  }
+  return out;
+}
+
+async function cargarEstado(probar) {
+  if (!nube()) { _est = null; return; }
+  try { _est = await __X.llamar('apiIntegracionEstado', !!probar); } catch (e) { _est = { error: (e && e.message) || String(e) }; }
+}
+
+async function cargarVista() {
+  if (!nube() || !_est || !_est.urlConfigurada || !_est.tokenConfigurado) { _vista = null; return; }
+  try { _vista = await __X.llamar('apiIntegracionVista'); _vistaTs = Date.now(); } catch (e) { _vista = null; anotar('⚠ vista: ' + ((e && e.message) || e)); }
+}
+
+function chip(ok, txt) { return '<span class="badge ' + (ok ? 'badge-green' : 'badge-amber') + '">' + escH(txt) + '</span>'; }
+
+function tarjetaConexion() {
+  const e = _est || {};
+  if (e.error) return '<div class="section"><h2>🛰️ Conexión</h2><div class="warn">' + escH(e.error) + '</div></div>';
+  const puedeAdmin = admin();
+  return '<div class="section"><h2>🔌 Conexión con Satélite</h2>' +
+    '<div class="page-subtitle">' + chip(e.urlConfigurada, 'URL ' + (e.urlConfigurada ? 'lista' : 'falta')) + ' ' + chip(e.tokenConfigurado, 'Clave ' + (e.tokenConfigurado ? 'lista' : 'falta')) + ' ' + chip(e.hojaConfigurada, 'Planilla ' + (e.hojaConfigurada ? 'lista' : 'falta')) +
+    (e.satelite ? ' ' + chip(true, 'Satélite ' + escH(e.satelite.version) + ' · ' + e.satelite.ots + ' OT') : '') + (e.errorConexion ? ' <span class="badge badge-red">' + escH(e.errorConexion) + '</span>' : '') + '</div>' +
+    (puedeAdmin ? '<div class="form-grid" style="margin-top:8px;">' +
+      '<div><label>URL de la aplicación web de Satélite (termina en /exec)</label><input id="itUrl" placeholder="https://script.google.com/macros/s/…/exec"></div>' +
+      '<div><label>Clave de acceso de Satélite (SAT_TOKEN)</label><input id="itTok" type="password" autocomplete="off"></div>' +
+      '<div><label>ID o URL de la planilla de Satélite</label><input id="itId" placeholder="Solo la primera vez o si cambia"></div>' +
+      '<div><label>Dirección para abrir Satélite en el navegador</label><input id="itWeb" placeholder="https://…" value="' + escAttr(e.urlWeb || '') + '"></div>' +
+      '</div><div style="margin-top:8px;"><button class="btn-success btn-sm" id="itGuardar">Guardar y probar</button> <button class="btn-outline btn-sm" id="itProbar">Probar conexión</button></div>' : '<div class="info" style="margin-top:6px;">La conexión la configura un administrador.</div>') +
+    '</div>';
+}
+
+function tarjetaCompartido() {
+  const e = _est || {};
+  const listo = e.urlConfigurada && e.tokenConfigurado;
+  const fila = function (a, b, c, d) { return '<tr><td><b>' + a + '</b></td><td>' + b + '</td><td>' + c + '</td><td>' + d + '</td></tr>'; };
+  return '<div class="section"><h2>🔁 Qué se comparte y quién manda</h2>' +
+    '<div class="page-subtitle">Los dos sistemas trabajan sobre los mismos datos con pantallas distintas. Cada dato tiene un solo dueño y el otro lo ve; nunca se pisa lo más reciente.</div>' +
+    '<div class="table-wrap"><table><thead><tr><th>Dato</th><th>Dueño</th><th>Sentido</th><th>Última sincronización</th></tr></thead><tbody>' +
+    fila('Pedidos de despacho', 'ERP y Satélite', '⇄ por número de pedido; estado logístico lo manda Satélite', fechaCorta(e.ultimaPedidos)) +
+    fila('Datos de envío (destinatario / remitente)', 'El último que lo edita', '⇄', fechaCorta(e.ultimaPedidos)) +
+    fila('OT, documentos y bultos', 'Satélite', '→ al ERP (Packing)', fechaCorta(e.ultimaOT)) +
+    fila('Medidas y pesos de productos', 'Satélite (bodega)', '→ al cotizador del ERP; un ajuste más reciente del ERP se respeta', fechaCorta(e.ultimaDatos)) +
+    fila('Ubicaciones de productos', 'Bodega (ambos)', '⇄ con control de conflicto', fechaCorta(e.ultimaDatos)) +
+    fila('Catálogo (código, descripción, precio…)', 'ERP', '→ a Satélite, conservando sus ubicaciones', fechaCorta(e.ultimaOT)) +
+    fila('Seguimiento del courier', 'Satélite', '→ al ERP (solo lectura)', fechaCorta(e.ultimaDatos)) +
+    fila('Post Venta, RMA y devoluciones', 'ERP', 'No se sincroniza ni se modifica', '—') +
+    '</tbody></table></div>' +
+    '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;"><button class="btn-primary btn-sm" id="itSync"' + (listo && !_ocupado ? '' : ' disabled') + '>' + (_ocupado ? '⏳ Sincronizando…' : '🔄 Sincronizar todo ahora') + '</button>' +
+    '<button class="btn-outline btn-sm" id="itSyncPed"' + (listo && !_ocupado ? '' : ' disabled') + '>Solo pedidos</button>' +
+    '<button class="btn-outline btn-sm" id="itSyncDat"' + (listo && !_ocupado ? '' : ' disabled') + '>Solo medidas y ubicaciones</button>' +
+    '<button class="btn-outline btn-sm" id="itSyncOT"' + (listo && !_ocupado ? '' : ' disabled') + '>Solo OT y bultos</button></div>' +
+    (admin() ? '<div style="margin-top:10px;display:flex;gap:14px;flex-wrap:wrap;align-items:center;">' +
+      '<label><input type="checkbox" id="itAuto" ' + (e.auto ? 'checked' : '') + '> Sincronizar solo cada 5 minutos mientras haya alguien conectado</label>' +
+      '<label><input type="checkbox" id="itImp" ' + (e.importarDeSatelite !== false ? 'checked' : '') + '> Traer a Pedidos los pedidos nuevos de Satélite</label>' +
+      '<label><input type="checkbox" id="itCre" ' + (e.crearEnSatelite ? 'checked' : '') + '> Enviar a Satélite los pedidos de despacho del ERP</label>' +
+      '<label>Antigüedad máxima al traer <input id="itDias" type="number" min="1" max="365" value="' + (e.dias || 45) + '" style="width:70px;"> días</label>' +
+      '<button class="btn-outline btn-sm" id="itOpc">Guardar opciones</button></div>' : '') +
+    '</div>';
+}
+
+function tarjetaCotizador() {
+  const e = _est || {};
+  const listo = e.urlConfigurada && e.tokenConfigurado;
+  if (!admin()) return '';
+  return '<div class="section"><h2>💲 Couriers y tarifas del cotizador</h2>' +
+    '<div class="page-subtitle">Un solo juego de couriers y tarifas: el ERP las define por zona en $/kg y se convierten al formato de tramos de Satélite, de modo que ambos cotizadores den el mismo valor. Se conservan los parámetros propios de Satélite (sobredimensión, límites, por pagar, retiro).</div>' +
+    '<div style="margin-top:8px;"><button class="btn-outline btn-sm" id="itCotVer"' + (listo && !_ocupado ? '' : ' disabled') + '>Ver qué se enviará</button> <button class="btn-primary btn-sm" id="itCotEnv"' + (listo && !_ocupado ? '' : ' disabled') + '>Enviar couriers y tarifas a Satélite</button></div></div>';
+}
+
+async function enviarCotizador(soloVer) {
+  if (_ocupado) return;
+  _ocupado = true; pintar();
+  try {
+    const paq = await __X.paqueteCotizadorSatelite();
+    if (!soloVer && !window.confirm('Se reemplazarán en Satélite las tarifas de ' + paq.length + ' courier(s) (' + paq.map(function (x) { return x.courier; }).join(', ') + ') por las del ERP.\n\n¿Continuar?')) return;
+    const r = await __X.llamar('apiIntegracionCotizadorEnviar', paq, !!soloVer);
+    r.couriers.forEach(function (c) { anotar((soloVer ? 'Se enviaría ' : 'Enviado ') + c.courier + ': ' + c.filas + ' filas de tarifa (antes ' + c.filasPrevias + ')'); });
+    toast(soloVer ? 'Revisión lista: ' + r.couriers.length + ' courier(s)' : 'Tarifas enviadas a Satélite: ' + r.couriers.length + ' courier(s)', 'success');
+  } catch (e) { toast('No se pudo: ' + ((e && e.message) || e), 'error'); }
+  finally { _ocupado = false; pintar(); }
+}
+
+function tarjetaPedidos() {
+  if (!_vista) return '';
+  const filas = _vista.vinculos.slice(0, 80).map(function (v) {
+    return '<tr><td>' + escH(v.numero) + '</td><td>' + escH(v.cliente) + '</td><td>' + escH(ESTADO_LABEL[v.erpEstado] || v.erpEstado) + '</td><td>' + escH(etapaErp(v.satEstado)) + (v.satEstado ? ' <span class="page-subtitle">· ' + escH(v.satEstado) + '</span>' : '') + '</td><td>' + (v.envio ? '✅' : '—') +
+      '</td><td>' + (v.falta ? '<span class="badge badge-red">falta en ' + escH(v.falta) + '</span>' : '') + '</td><td style="white-space:nowrap;"><button class="btn-outline btn-sm" data-env="' + escAttr(v.erpId) + '">Envío</button> <button class="btn-outline btn-sm" data-des="' + escAttr(v.erpId) + '">Desvincular</button></td></tr>';
+  }).join('');
+  const rev = (_vista.revisar || []).map(function (r) {
+    return '<div class="card" style="margin-bottom:6px;padding:8px;"><b>' + escH(r.numero) + '</b> · ' + escH(r.cliente || '') + '<div class="page-subtitle">Varios pedidos coinciden: elige el de Satélite que corresponde.</div>' +
+      r.candidatos.map(function (c) { return '<button class="btn-outline btn-sm" data-vin="' + escAttr(r.erpId) + '|' + escAttr(c.satId) + '">' + escH(c.numero + (c.documento ? ' · doc ' + c.documento : '') + ' · ' + c.estado + (c.destinatario ? ' · ' + c.destinatario : '')) + '</button> '; }).join('') + '</div>';
+  }).join('');
+  const conf = (_vista.conflictos || []).map(function (c) { return '<li>' + escH((c.numero || '') + ': ' + c.motivo) + '</li>'; }).join('');
+  return '<div class="section"><h2>📦 Pedidos compartidos (' + _vista.vinculos.length + ')</h2>' +
+    (rev ? '<h3>Por revisar</h3>' + rev : '') + (conf ? '<h3>Conflictos informados</h3><ul>' + conf + '</ul>' : '') +
+    (filas ? '<div class="table-wrap"><table><thead><tr><th>Pedido</th><th>Cliente</th><th>Estado ERP</th><th>Etapa en Satélite</th><th>Envío</th><th></th><th></th></tr></thead><tbody>' + filas + '</tbody></table></div>' : '<div class="info">Aún no hay pedidos vinculados. Se vinculan solos por número de pedido al sincronizar.</div>') + '</div>';
+}
+
+function tarjetaSeguimiento() {
+  if (!_seg.length) return '';
+  const filas = _seg.slice(0, 60).map(function (s) {
+    return '<tr><td>' + escH(s.orden) + '</td><td>' + escH(s.numeroDocumento) + '</td><td>' + escH(s.courier) + '</td><td>' + escH(s.tracking) + '</td><td>' + escH(s.estado) + (s.incidencia ? ' <span class="badge badge-red">incidencia</span>' : '') + (s.retorno ? ' <span class="badge badge-amber">retorno</span>' : '') + '</td><td>' + fechaCorta(s.actualizado) + '</td></tr>';
+  }).join('');
+  return '<div class="section"><h2>🚚 Seguimiento de couriers (solo lectura)</h2><div class="table-wrap"><table><thead><tr><th>Pedido</th><th>Documento</th><th>Courier</th><th>N° seguimiento</th><th>Estado</th><th>Actualizado</th></tr></thead><tbody>' + filas + '</tbody></table></div></div>';
+}
+
+function tarjetaPV() {
+  return '<div class="section"><h2>🛠️ Post Venta</h2><div class="page-subtitle">Los casos, las solicitudes RMA y sus bultos de Packing quedan fuera de esta integración: no se envían, no se vinculan y no se modifican. Los envíos a proveedor siguen su flujo normal en el ERP.</div></div>';
+}
+
+function tarjetaRegistro() {
+  if (!_log.length) return '';
+  return '<div class="section"><h2>🧾 Registro de esta sesión</h2><div style="font-size:13px;line-height:1.6;">' + _log.map(function (l) { return '<div>' + escH(l) + '</div>'; }).join('') + '</div></div>';
+}
+
+function pintar() {
+  if (!_box || !_box.isConnected) return;
+  if (!puede('logistica:ver')) { _box.innerHTML = '<div class="warn">No tienes permiso para ver esta pantalla.</div>'; return; }
+  _box.innerHTML = '<h1>🛰️ Integración con Satélite</h1><div class="page-subtitle">Satélite es el especialista de operación en bodega (cubicación, packing, despacho, rotulado, seguimiento). El ERP lleva el negocio completo. Aquí se ven los datos que comparten.</div>' +
+    tarjetaConexion() + tarjetaCompartido() + tarjetaCotizador() + tarjetaPedidos() + tarjetaSeguimiento() + tarjetaPV() + tarjetaRegistro();
+  enganchar();
+}
+
+function q(s) { return _box.querySelector(s); }
+
+function enganchar() {
+  const cv = q('#itCotVer'), ce = q('#itCotEnv');
+  if (cv) cv.addEventListener('click', function () { enviarCotizador(true); });
+  if (ce) ce.addEventListener('click', function () { enviarCotizador(false); });
+  const g = q('#itGuardar');
+  if (g) g.addEventListener('click', async function () {
+    try {
+      const url = q('#itUrl').value.trim(), tok = q('#itTok').value.trim(), id = q('#itId').value.trim(), web = q('#itWeb').value.trim();
+      if (!url && !tok && !id && web === (_est && _est.urlWeb || '')) { toast('Escribe al menos un dato para guardar', 'warn'); return; }
+      await __X.llamar('apiIntegracionConfigurar', { url: url, token: tok, id: id, urlWeb: web });
+      await cargarEstado(true);
+      toast(_est && _est.satelite ? 'Conexión correcta con Satélite ' + _est.satelite.version : 'Datos guardados', _est && _est.errorConexion ? 'warn' : 'success');
+      await cargarVista();
+      pintar();
+    } catch (e) { toast('No se pudo guardar: ' + ((e && e.message) || e), 'error'); }
+  });
+  const pr = q('#itProbar');
+  if (pr) pr.addEventListener('click', async function () { await cargarEstado(true); pintar(); toast(_est && _est.satelite ? 'Conexión correcta con Satélite ' + _est.satelite.version : ((_est && _est.errorConexion) || 'Sin respuesta'), _est && _est.satelite ? 'success' : 'error'); });
+  const bind = function (id, fn, msg) {
+    const b = q(id);
+    if (!b) return;
+    b.addEventListener('click', async function () {
+      if (_ocupado) return;
+      _ocupado = true; pintar();
+      try { await fn(); toast(msg, 'success'); } catch (e) { anotar('⚠ ' + ((e && e.message) || e)); toast('Error: ' + ((e && e.message) || e), 'error'); }
+      _ocupado = false;
+      await cargarEstado(false); await cargarVista(); pintar();
+    });
+  };
+  bind('#itSyncPed', sincronizarPedidos, 'Pedidos sincronizados');
+  bind('#itSyncDat', sincronizarDatos, 'Medidas y ubicaciones sincronizadas');
+  bind('#itSyncOT', sincronizarOT, 'OT y bultos sincronizados');
+  const s = q('#itSync');
+  if (s) s.addEventListener('click', async function () { await sincronizarTodo(false); await cargarEstado(false); pintar(); });
+  const op = q('#itOpc');
+  if (op) op.addEventListener('click', async function () {
+    try {
+      await __X.llamar('apiIntegracionConfigurar', { auto: q('#itAuto').checked, importarDeSatelite: q('#itImp').checked, crearEnSatelite: q('#itCre').checked, dias: Number(q('#itDias').value) || 45 });
+      await cargarEstado(false); pintar(); toast('Opciones guardadas', 'success');
+    } catch (e) { toast('No se pudo guardar: ' + ((e && e.message) || e), 'error'); }
+  });
+  Array.prototype.forEach.call(_box.querySelectorAll('[data-vin]'), function (b) {
+    b.addEventListener('click', async function () {
+      const par = b.getAttribute('data-vin').split('|');
+      try { await __X.llamar('apiIntegracionVincular', par[0], par[1]); toast('Pedidos vinculados', 'success'); await sincronizarPedidos(); await cargarVista(); pintar(); }
+      catch (e) { toast('No se pudo vincular: ' + ((e && e.message) || e), 'error'); }
+    });
+  });
+  Array.prototype.forEach.call(_box.querySelectorAll('[data-des]'), function (b) {
+    b.addEventListener('click', async function () {
+      if (!confirm('¿Desvincular este pedido de Satélite? Dejará de sincronizarse.')) return;
+      try { await __X.llamar('apiIntegracionDesvincular', b.getAttribute('data-des')); await cargarVista(); pintar(); }
+      catch (e) { toast('No se pudo desvincular: ' + ((e && e.message) || e), 'error'); }
+    });
+  });
+  Array.prototype.forEach.call(_box.querySelectorAll('[data-env]'), function (b) {
+    b.addEventListener('click', function () { abrirEnvio(b.getAttribute('data-env')); });
+  });
+}
+
+
+async function abrirEnvio(erpId) {
+  if (!__X.homologacion) { toast('Módulo de datos de envío no disponible', 'error'); return; }
+  await __X.homologacion.abrirEnvio(erpId, async function () { await cargarVista(); pintar(); });
+}
+
+async function renderSatelite(cont) {
+  _box = cont;
+  _box.innerHTML = '<div class="info">⏳ Cargando…</div>';
+  await cargarEstado(false);
+  await cargarVista();
+  try { const c = await store.get(KEY_SEG, null); if (c && Array.isArray(c.lista) && !_seg.length) _seg = c.lista; } catch (e) {}
+  pintar();
+  if (_est && _est.urlConfigurada && _est.tokenConfigurado && admin()) { cargarEstado(true).then(pintar); }
+}
+
+function seguimientoDe(numero) {
+  const k = String(numero || '').replace(/[^0-9a-zA-Z]/g, '').toLowerCase();
+  return _seg.filter(function (s) { return String(s.orden || '').replace(/[^0-9a-zA-Z]/g, '').toLowerCase() === k; });
+}
+
+function instalarMenu() {
+  const grupos = __X.GRUPOS || [];
+  const g = grupos.find(function (x) { return x.id === 'operaciones'; });
+  if (!g) return;
+  if (g.opciones.some(function (o) { return o.modulo === 'satelite'; })) return;
+  const i = g.opciones.findIndex(function (o) { return o.sub === 'packing'; });
+  g.opciones.splice(i >= 0 ? i + 1 : g.opciones.length, 0, OPCION_MENU);
+  try { if (typeof __X.dibujarMenu === 'function') __X.dibujarMenu(__X.router.idActual(), __X.router.subActual()); } catch (e) {}
+}
+
+function programarAuto() {
+  if (_temporizador) return;
+  _temporizador = setInterval(async function () {
+    if (_ocupado || document.hidden) return;
+    if (!__X.isAutenticado || !__X.isAutenticado()) return;
+    if (!puede('logistica:ver') || !nube()) return;
+    if (Date.now() - _ultimoAuto < 290000) return;
+    try {
+      if (!_est) await cargarEstado(false);
+      if (_est && _est.auto && _est.urlConfigurada && _est.tokenConfigurado) await sincronizarTodo(true);
+      else _ultimoAuto = Date.now();
+    } catch (e) {}
+  }, 30000);
+}
+
+__X.router.registrarVista('satelite', function (cont) { return renderSatelite(cont); });
+function etapaErp(sat) {
+  const k = String(sat || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().trim();
+  if (!k) return '';
+  if (k === 'RECIBIDO') return 'Pendiente';
+  if (k === 'ENVIADO') return 'Despachado';
+  if (k === 'ENTREGADO') return 'Entregado';
+  return 'Preparación';
+}
+
+function urlSatelite() { return (_est && _est.urlWeb) || ''; }
+
+function abrirSatelite() {
+  const u = urlSatelite();
+  if (!u) { toast('Falta la dirección de Satélite: configúrala en Operaciones › Satélite', 'warn'); return false; }
+  window.open(u, '_blank', 'noopener');
+  return true;
+}
+
+async function estadoSatelite(erpId) {
+  if (!nube()) return null;
+  if (!_est) await cargarEstado(false);
+  if (!_est || !_est.urlConfigurada || !_est.tokenConfigurado) return null;
+  if (!_vista || Date.now() - _vistaTs > 120000) await cargarVista();
+  if (!_vista) return null;
+  const v = _vista.vinculos.filter(function (x) { return x.erpId === erpId; })[0];
+  return v ? { estado: v.satEstado, etapa: etapaErp(v.satEstado), numero: v.numero, urlWeb: urlSatelite() } : { estado: '', etapa: '', numero: '', sinVinculo: true, urlWeb: urlSatelite() };
+}
+
+async function avisarDespacho(erpId, numero) {
+  try {
+    const v = await estadoSatelite(erpId);
+    if (!v) return;
+    if (v.etapa === 'Despachado' || v.etapa === 'Entregado') return;
+    const donde = v.sinVinculo ? 'aún no está vinculado a Satélite' : 'está en Satélite en etapa «' + v.etapa + '» (' + v.estado + ')';
+    if (window.confirm('El pedido ' + (numero || erpId) + ' ' + donde + '.\nEl despacho físico (cubicación, packing, rótulos y manifiesto) se opera en Satélite.\n\n¿Abrir Satélite ahora?')) abrirSatelite();
+  } catch (e) {}
+}
+
+__X.renderSatelite = renderSatelite;
+__X.integracionSat = { sincronizarTodo: sincronizarTodo, sincronizarPedidos: sincronizarPedidos, sincronizarDatos: sincronizarDatos, seguimientoDe: seguimientoDe, estadoSatelite: estadoSatelite, etapaErp: etapaErp, abrirSatelite: abrirSatelite, avisarDespacho: avisarDespacho, aplicarCambiosPedidos: aplicarCambiosPedidos };
+instalarMenu();
+programarAuto();
+})();
+
+window.__FIN=(window.__FIN||[]);window.__FIN.push("12_satelite_ui");</script>
+<script>window.__INICIO=(window.__INICIO||[]);window.__INICIO.push("13_homologacion_logistica");
+(function(){
+'use strict';
+const { escH, escAttr, toast } = __X;
+
+const REGIONES_CL = ['ARICA Y PARINACOTA', 'TARAPACÁ', 'ANTOFAGASTA', 'ATACAMA', 'COQUIMBO', 'VALPARAÍSO', 'METROPOLITANA', "LIBERTADOR B. O'HIGGINS", 'MAULE', 'ÑUBLE', 'BIOBÍO', 'LA ARAUCANÍA', 'LOS RÍOS', 'LOS LAGOS', 'AYSÉN', 'MAGALLANES'];
+const COMUNAS_CL = '01101|Iquique|Iquique;01107|Alto Hospicio|Iquique;01401|Pozo Almonte|Tamarugal;01402|Camiña|Tamarugal;01403|Colchane|Tamarugal;01404|Huara|Tamarugal;01405|Pica|Tamarugal;02101|Antofagasta|Antofagasta;02102|Mejillones|Antofagasta;02103|Sierra Gorda|Antofagasta;02104|Taltal|Antofagasta;02201|Calama|El Loa;02202|Ollagüe|El Loa;02203|San Pedro de Atacama|El Loa;02301|Tocopilla|Tocopilla;02302|María Elena|Tocopilla;03101|Copiapó|Copiapó;03102|Caldera|Copiapó;03103|Tierra Amarilla|Copiapó;03201|Chañaral|Chañaral;03202|Diego de Almagro|Chañaral;03301|Vallenar|Huasco;03302|Alto del Carmen|Huasco;03303|Freirina|Huasco;03304|Huasco|Huasco;04101|La Serena|Elqui;04102|Coquimbo|Elqui;04103|Andacollo|Elqui;04104|La Higuera|Elqui;04105|Paihuano|Elqui;04106|Vicuña|Elqui;04201|Illapel|Choapa;04202|Canela|Choapa;04203|Los Vilos|Choapa;04204|Salamanca|Choapa;04301|Ovalle|Limarí;04302|Combarbalá|Limarí;04303|Monte Patria|Limarí;04304|Punitaqui|Limarí;04305|Río Hurtado|Limarí;05101|Valparaíso|Valparaíso;05102|Casablanca|Valparaíso;05103|Concón|Valparaíso;05104|Juan Fernández|Valparaíso;05105|Puchuncaví|Valparaíso;05107|Quintero|Valparaíso;05109|Viña del Mar|Valparaíso;05201|Isla de Pascua|Isla de Pascua;05301|Los Andes|Los Andes;05302|Calle Larga|Los Andes;05303|Rinconada|Los Andes;05304|San Esteban|Los Andes;05401|La Ligua|Petorca;05402|Cabildo|Petorca;05403|Papudo|Petorca;05404|Petorca|Petorca;05405|Zapallar|Petorca;05501|Quillota|Quillota;05502|La Calera|Quillota;05503|Hijuelas|Quillota;05504|La Cruz|Quillota;05506|Nogales|Quillota;05601|San Antonio|San Antonio;05602|Algarrobo|San Antonio;05603|Cartagena|San Antonio;05604|El Quisco|San Antonio;05605|El Tabo|San Antonio;05606|Santo Domingo|San Antonio;05701|San Felipe|San Felipe de Aconcagua;05702|Catemu|San Felipe de Aconcagua;05703|Llaillay|San Felipe de Aconcagua;05704|Panquehue|San Felipe de Aconcagua;05705|Putaendo|San Felipe de Aconcagua;05706|Santa María|San Felipe de Aconcagua;05801|Quilpué|Marga Marga;05802|Limache|Marga Marga;05803|Olmué|Marga Marga;05804|Villa Alemana|Marga Marga;06101|Rancagua|Cachapoal;06102|Codegua|Cachapoal;06103|Coinco|Cachapoal;06104|Coltauco|Cachapoal;06105|Doñihue|Cachapoal;06106|Graneros|Cachapoal;06107|Las Cabras|Cachapoal;06108|Machalí|Cachapoal;06109|Malloa|Cachapoal;06110|Mostazal|Cachapoal;06111|Olivar|Cachapoal;06112|Peumo|Cachapoal;06113|Pichidegua|Cachapoal;06114|Quinta de Tilcoco|Cachapoal;06115|Rengo|Cachapoal;06116|Requínoa|Cachapoal;06117|San Vicente|Cachapoal;06201|Pichilemu|Cardenal Caro;06202|La Estrella|Cardenal Caro;06203|Litueche|Cardenal Caro;06204|Marchigüe|Cardenal Caro;06205|Navidad|Cardenal Caro;06206|Paredones|Cardenal Caro;06301|San Fernando|Colchagua;06302|Chépica|Colchagua;06303|Chimbarongo|Colchagua;06304|Lolol|Colchagua;06305|Nancagua|Colchagua;06306|Palmilla|Colchagua;06307|Peralillo|Colchagua;06308|Placilla|Colchagua;06309|Pumanque|Colchagua;06310|Santa Cruz|Colchagua;07101|Talca|Talca;07102|Constitución|Talca;07103|Curepto|Talca;07104|Empedrado|Talca;07105|Maule|Talca;07106|Pelarco|Talca;07107|Pencahue|Talca;07108|Río Claro|Talca;07109|San Clemente|Talca;07110|San Rafael|Talca;07201|Cauquenes|Cauquenes;07202|Chanco|Cauquenes;07203|Pelluhue|Cauquenes;07301|Curicó|Curicó;07302|Hualañé|Curicó;07303|Licantén|Curicó;07304|Molina|Curicó;07305|Rauco|Curicó;07306|Romeral|Curicó;07307|Sagrada Familia|Curicó;07308|Teno|Curicó;07309|Vichuquén|Curicó;07401|Linares|Linares;07402|Colbún|Linares;07403|Longaví|Linares;07404|Parral|Linares;07405|Retiro|Linares;07406|San Javier|Linares;07407|Villa Alegre|Linares;07408|Yerbas Buenas|Linares;08101|Concepción|Concepción;08102|Coronel|Concepción;08103|Chiguayante|Concepción;08104|Florida|Concepción;08105|Hualqui|Concepción;08106|Lota|Concepción;08107|Penco|Concepción;08108|San Pedro de la Paz|Concepción;08109|Santa Juana|Concepción;08110|Talcahuano|Concepción;08111|Tomé|Concepción;08112|Hualpén|Concepción;08201|Lebu|Arauco;08202|Arauco|Arauco;08203|Cañete|Arauco;08204|Contulmo|Arauco;08205|Curanilahue|Arauco;08206|Los Álamos|Arauco;08207|Tirúa|Arauco;08301|Los Ángeles|Biobío;08302|Antuco|Biobío;08303|Cabrero|Biobío;08304|Laja|Biobío;08305|Mulchén|Biobío;08306|Nacimiento|Biobío;08307|Negrete|Biobío;08308|Quilaco|Biobío;08309|Quilleco|Biobío;08310|San Rosendo|Biobío;08311|Santa Bárbara|Biobío;08312|Tucapel|Biobío;08313|Yumbel|Biobío;08314|Alto Biobío|Biobío;09101|Temuco|Cautín;09102|Carahue|Cautín;09103|Cunco|Cautín;09104|Curarrehue|Cautín;09105|Freire|Cautín;09106|Galvarino|Cautín;09107|Gorbea|Cautín;09108|Lautaro|Cautín;09109|Loncoche|Cautín;09110|Melipeuco|Cautín;09111|Nueva Imperial|Cautín;09112|Padre Las Casas|Cautín;09113|Perquenco|Cautín;09114|Pitrufquén|Cautín;09115|Pucón|Cautín;09116|Saavedra|Cautín;09117|Teodoro Schmidt|Cautín;09118|Toltén|Cautín;09119|Vilcún|Cautín;09120|Villarrica|Cautín;09121|Cholchol|Cautín;09201|Angol|Malleco;09202|Collipulli|Malleco;09203|Curacautín|Malleco;09204|Ercilla|Malleco;09205|Lonquimay|Malleco;09206|Los Sauces|Malleco;09207|Lumaco|Malleco;09208|Purén|Malleco;09209|Renaico|Malleco;09210|Traiguén|Malleco;09211|Victoria|Malleco;10101|Puerto Montt|Llanquihue;10102|Calbuco|Llanquihue;10103|Cochamó|Llanquihue;10104|Fresia|Llanquihue;10105|Frutillar|Llanquihue;10106|Los Muermos|Llanquihue;10107|Llanquihue|Llanquihue;10108|Maullín|Llanquihue;10109|Puerto Varas|Llanquihue;10201|Castro|Chiloé;10202|Ancud|Chiloé;10203|Chonchi|Chiloé;10204|Curaco de Vélez|Chiloé;10205|Dalcahue|Chiloé;10206|Puqueldón|Chiloé;10207|Queilén|Chiloé;10208|Quellón|Chiloé;10209|Quemchi|Chiloé;10210|Quinchao|Chiloé;10301|Osorno|Osorno;10302|Puerto Octay|Osorno;10303|Purranque|Osorno;10304|Puyehue|Osorno;10305|Río Negro|Osorno;10306|San Juan de la Costa|Osorno;10307|San Pablo|Osorno;10401|Chaitén|Palena;10402|Futaleufú|Palena;10403|Hualaihué|Palena;10404|Palena|Palena;11101|Coyhaique|Coyhaique;11102|Lago Verde|Coyhaique;11201|Aysén|Aysén;11202|Cisnes|Aysén;11203|Guaitecas|Aysén;11301|Cochrane|Capitán Prat;11302|O\'Higgins|Capitán Prat;11303|Tortel|Capitán Prat;11401|Chile Chico|General Carrera;11402|Río Ibáñez|General Carrera;12101|Punta Arenas|Magallanes;12102|Laguna Blanca|Magallanes;12103|Río Verde|Magallanes;12104|San Gregorio|Magallanes;12201|Cabo de Hornos|Antártica Chilena;12202|Antártica|Antártica Chilena;12301|Porvenir|Tierra del Fuego;12302|Primavera|Tierra del Fuego;12303|Timaukel|Tierra del Fuego;12401|Natales|Última Esperanza;12402|Torres del Paine|Última Esperanza;13101|Santiago|Santiago;13102|Cerrillos|Santiago;13103|Cerro Navia|Santiago;13104|Conchalí|Santiago;13105|El Bosque|Santiago;13106|Estación Central|Santiago;13107|Huechuraba|Santiago;13108|Independencia|Santiago;13109|La Cisterna|Santiago;13110|La Florida|Santiago;13111|La Granja|Santiago;13112|La Pintana|Santiago;13113|La Reina|Santiago;13114|Las Condes|Santiago;13115|Lo Barnechea|Santiago;13116|Lo Espejo|Santiago;13117|Lo Prado|Santiago;13118|Macul|Santiago;13119|Maipú|Santiago;13120|Ñuñoa|Santiago;13121|Pedro Aguirre Cerda|Santiago;13122|Peñalolén|Santiago;13123|Providencia|Santiago;13124|Pudahuel|Santiago;13125|Quilicura|Santiago;13126|Quinta Normal|Santiago;13127|Recoleta|Santiago;13128|Renca|Santiago;13129|San Joaquín|Santiago;13130|San Miguel|Santiago;13131|San Ramón|Santiago;13132|Vitacura|Santiago;13201|Puente Alto|Cordillera;13202|Pirque|Cordillera;13203|San José de Maipo|Cordillera;13301|Colina|Chacabuco;13302|Lampa|Chacabuco;13303|Tiltil|Chacabuco;13401|San Bernardo|Maipo;13402|Buin|Maipo;13403|Calera de Tango|Maipo;13404|Paine|Maipo;13501|Melipilla|Melipilla;13502|Alhué|Melipilla;13503|Curacaví|Melipilla;13504|María Pinto|Melipilla;13505|San Pedro|Melipilla;13601|Talagante|Talagante;13602|El Monte|Talagante;13603|Isla de Maipo|Talagante;13604|Padre Hurtado|Talagante;13605|Peñaflor|Talagante;14101|Valdivia|Valdivia;14102|Corral|Valdivia;14103|Lanco|Valdivia;14104|Los Lagos|Valdivia;14105|Máfil|Valdivia;14106|Mariquina|Valdivia;14107|Paillaco|Valdivia;14108|Panguipulli|Valdivia;14201|La Unión|Ranco;14202|Futrono|Ranco;14203|Lago Ranco|Ranco;14204|Río Bueno|Ranco;15101|Arica|Arica;15102|Camarones|Arica;15201|Putre|Parinacota;15202|General Lagos|Parinacota;16101|Chillán|Diguillín;16102|Chillán Viejo|Diguillín;16103|Quillón|Diguillín;16104|Bulnes|Diguillín;16105|San Ignacio|Diguillín;16106|El Carmen|Diguillín;16107|Pinto|Diguillín;16108|Pemuco|Diguillín;16109|Yungay|Diguillín;16201|Quirihue|Itata;16202|Cobquecura|Itata;16203|Ninhue|Itata;16204|Treguaco|Itata;16205|Coelemu|Itata;16206|Portezuelo|Itata;16207|Ránquil|Itata;16301|San Carlos|Punilla;16302|Ñiquén|Punilla;16303|Coihueco|Punilla;16304|San Fabián|Punilla;16305|San Nicolás|Punilla';
+const GEO_NUM = { 1: 'TARAPACÁ', 2: 'ANTOFAGASTA', 3: 'ATACAMA', 4: 'COQUIMBO', 5: 'VALPARAÍSO', 6: "LIBERTADOR B. O'HIGGINS", 7: 'MAULE', 8: 'BIOBÍO', 9: 'LA ARAUCANÍA', 10: 'LOS LAGOS', 11: 'AYSÉN', 12: 'MAGALLANES', 13: 'METROPOLITANA', 14: 'LOS RÍOS', 15: 'ARICA Y PARINACOTA', 16: 'ÑUBLE' };
+const GEO_CLAVES = [['ARICA', 'ARICA Y PARINACOTA'], ['PARINACOTA', 'ARICA Y PARINACOTA'], ['TARAPACA', 'TARAPACÁ'], ['ANTOFAGASTA', 'ANTOFAGASTA'], ['ATACAMA', 'ATACAMA'], ['COQUIMBO', 'COQUIMBO'], ['VALPARAISO', 'VALPARAÍSO'], ['METROPOLITANA', 'METROPOLITANA'], ['SANTIAGO', 'METROPOLITANA'], ['HIGGINS', "LIBERTADOR B. O'HIGGINS"], ['LIBERTADOR', "LIBERTADOR B. O'HIGGINS"], ['MAULE', 'MAULE'], ['NUBLE', 'ÑUBLE'], ['BIOBIO', 'BIOBÍO'], ['BIO BIO', 'BIOBÍO'], ['ARAUCANIA', 'LA ARAUCANÍA'], ['LOS RIOS', 'LOS RÍOS'], ['LOS LAGOS', 'LOS LAGOS'], ['AYSEN', 'AYSÉN'], ['AISEN', 'AYSÉN'], ['MAGALLANES', 'MAGALLANES']];
+const GEO_ALIAS_C = { COIHAIQUE: 'COYHAIQUE', AISEN: 'AYSEN', 'LLAY LLAY': 'LLAILLAY', MARCHIHUE: 'MARCHIGUE', PAIGUANO: 'PAIHUANO', 'TIL TIL': 'TILTIL', 'PUERTO NATALES': 'NATALES', 'SANTIAGO CENTRO': 'SANTIAGO', 'ISLA DE PASCUA RAPA NUI': 'ISLA DE PASCUA', 'RAPA NUI': 'ISLA DE PASCUA', 'CHOLCHOL': 'CHOLCHOL', 'CHOL CHOL': 'CHOLCHOL', 'RANQUI': 'RANQUIL', 'TREHUACO': 'TREGUACO', 'CABO DE HORNOS NAVARINO': 'CABO DE HORNOS', 'PUERTO WILLIAMS': 'CABO DE HORNOS', 'DONIHUE': 'DONIHUE', 'ALTO BIO BIO': 'ALTO BIOBIO', 'O HIGGINS': 'O HIGGINS' };
+const GEO_ALIAS_R = { 'ARICA Y PARINACOTA': ['ARICA', 'PARINACOTA', 'XV', '15'], 'TARAPACÁ': ['TARAPACA', 'IQUIQUE', 'I', '1'], 'ANTOFAGASTA': ['II', '2'], 'ATACAMA': ['COPIAPO', 'III', '3'], 'COQUIMBO': ['LA SERENA', 'IV', '4'], 'VALPARAÍSO': ['VALPARAISO', 'V', '5'], 'METROPOLITANA': ['RM', 'SANTIAGO', 'REGION METROPOLITANA', 'XIII', '13'], "LIBERTADOR B. O'HIGGINS": ['OHIGGINS', 'O HIGGINS', 'LIBERTADOR', 'RANCAGUA', 'VI', '6'], 'MAULE': ['TALCA', 'VII', '7'], 'ÑUBLE': ['NUBLE', 'CHILLAN', 'XVI', '16'], 'BIOBÍO': ['BIOBIO', 'BIO BIO', 'CONCEPCION', 'VIII', '8'], 'LA ARAUCANÍA': ['ARAUCANIA', 'TEMUCO', 'IX', '9'], 'LOS RÍOS': ['LOS RIOS', 'VALDIVIA', 'XIV', '14'], 'LOS LAGOS': ['PUERTO MONTT', 'X', '10'], 'AYSÉN': ['AYSEN', 'AISEN', 'COYHAIQUE', 'XI', '11'], 'MAGALLANES': ['MAGALLANES Y ANTARTICA', 'PUNTA ARENAS', 'XII', '12'] };
+const GEO_REG_ISO = { AP: 'ARICA Y PARINACOTA', TA: 'TARAPACÁ', AN: 'ANTOFAGASTA', AT: 'ATACAMA', CO: 'COQUIMBO', VS: 'VALPARAÍSO', RM: 'METROPOLITANA', LI: "LIBERTADOR B. O'HIGGINS", ML: 'MAULE', NB: 'ÑUBLE', BI: 'BIOBÍO', AR: 'LA ARAUCANÍA', LR: 'LOS RÍOS', LL: 'LOS LAGOS', AI: 'AYSÉN', MA: 'MAGALLANES' };
+const KEY_REMITENTE = 'hom_remitente';
+const CAMPOS_DIR = [['nombre', 'Nombre'], ['rut', 'RUT (opcional)'], ['calle', 'Calle'], ['numero', 'Número'], ['referencia', 'Referencia / depto'], ['region', 'Región'], ['comuna', 'Comuna'], ['ciudad', 'Ciudad'], ['telefono', 'Teléfono'], ['correo', 'Correo']];
+
+function sinAcentos(s) { return String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, ''); }
+function norm(s) { return String(s == null ? '' : s).replace(/\s+/g, ' ').trim().toUpperCase(); }
+function clave(s) { return sinAcentos(norm(s)).replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim(); }
+function usuarioNombre() { const u = __X.getUsuarioActual ? __X.getUsuarioActual() : null; return (u && u.nombre) || ''; }
+function nube() { return typeof __X.servidorDisponible === 'function' && __X.servidorDisponible(); }
+
+const Rut = {
+  MSG: 'RUT inválido: revise los números y el dígito verificador. Si no lo tiene, deje el campo vacío.',
+  limpio: function (r) { return String(r == null ? '' : r).replace(/[^0-9kK]/g, '').toUpperCase(); },
+  valido: function (r) {
+    const raw = String(r == null ? '' : r).trim().toUpperCase();
+    if (!/^[0-9.\s]+(-\s*)?[0-9K]$/.test(raw)) return false;
+    const s = Rut.limpio(raw), cuerpo = s.slice(0, -1).replace(/^0+/, ''), dv = s.slice(-1);
+    if (!/^\d{6,8}$/.test(cuerpo)) return false;
+    let suma = 0, mul = 2;
+    for (let i = cuerpo.length - 1; i >= 0; i--) { suma += parseInt(cuerpo.charAt(i), 10) * mul; mul = mul === 7 ? 2 : mul + 1; }
+    const res = 11 - (suma % 11), esp = res === 11 ? '0' : (res === 10 ? 'K' : String(res));
+    return esp === dv;
+  },
+  canon: function (r) { const s = Rut.limpio(r); if (s.length < 2) return s; return s.slice(0, -1).replace(/^0+/, '') + '-' + s.slice(-1); },
+  formato: function (r) {
+    const s = Rut.limpio(r); if (s.length < 2) return s;
+    return s.slice(0, -1).replace(/^0+/, '').replace(/\B(?=(\d{3})+(?!\d))/g, '.') + '-' + s.slice(-1);
+  },
+  revisar: function (el, final) {
+    const v = String(el.value || '').trim(), ok = !v || Rut.valido(v);
+    let msg = el.nextSibling && el.nextSibling.nodeType === 1 && /(^|\s)rut-msg(\s|$)/.test(el.nextSibling.className) ? el.nextSibling : null;
+    const mostrar = !ok && (final || el._rutVisto || Rut.limpio(v).length >= 9 || /-\s*[0-9K]$/i.test(v));
+    if (!msg) {
+      msg = document.createElement('div'); msg.className = 'rut-msg'; msg.setAttribute('role', 'alert');
+      msg.style.cssText = 'color:#b91c1c;font-weight:600;font-size:12px;margin-top:4px;display:none;';
+      el.parentNode.insertBefore(msg, el.nextSibling);
+    }
+    if (mostrar) el._rutVisto = true;
+    msg.textContent = mostrar ? Rut.MSG : ''; msg.style.display = mostrar ? '' : 'none';
+    el.style.borderColor = mostrar ? '#dc2626' : '';
+    if (final && ok && v) el.value = Rut.formato(v);
+    return ok;
+  },
+  enlazar: function (raiz) {
+    Array.prototype.forEach.call(raiz.querySelectorAll('[data-rut]'), function (el) {
+      el.addEventListener('input', function () { Rut.revisar(el, false); });
+      el.addEventListener('blur', function () { Rut.revisar(el, true); });
+      if (el.value) Rut.revisar(el, false);
+    });
+  },
+  revisarTodos: function (raiz) {
+    let ok = true;
+    Array.prototype.forEach.call(raiz.querySelectorAll('[data-rut]'), function (el) { if (!Rut.revisar(el, true)) ok = false; });
+    return ok;
+  },
+  enTexto: function (txt) {
+    const re = /(\d{1,2}\.?\d{3}\.?\d{3}\s*-?\s*[\dkK])(?![\dkK])/g; let m;
+    const t = String(txt || '');
+    while ((m = re.exec(t))) if (Rut.valido(m[1])) return Rut.canon(m[1]);
+    return '';
+  }
+};
+
+const Geo = {
+  lista: [], idx: {},
+  iniciar: function () {
+    if (Geo.lista.length) return;
+    COMUNAS_CL.split(';').forEach(function (x) {
+      const p = x.split('|'); if (p.length < 3) return;
+      const o = { c: norm(p[1]), p: norm(p[2]), r: GEO_NUM[parseInt(p[0].substr(0, 2), 10)] || '', k: p[0] };
+      Geo.lista.push(o);
+      const k = clave(o.c); (Geo.idx[k] = Geo.idx[k] || []).push(o);
+    });
+    Geo.lista.sort(function (a, b) { return a.c < b.c ? -1 : (a.c > b.c ? 1 : 0); });
+  },
+  claveBusqueda: function (s) { const k = clave(s); return GEO_ALIAS_C[k] || k; },
+  region: function (s) {
+    const k = clave(s); if (!k) return '';
+    for (const r in GEO_ALIAS_R) {
+      if (clave(r) === k) return r;
+      const a = GEO_ALIAS_R[r];
+      for (let i = 0; i < a.length; i++) if (a[i] === k) return r;
+    }
+    const t = k.replace(/^REGION (DE LA |DE LOS |DEL |DE )?/, '');
+    if (t === 'RM') return 'METROPOLITANA';
+    if (/^\d{1,2}$/.test(t) && GEO_NUM[+t]) return GEO_NUM[+t];
+    for (let i = 0; i < GEO_CLAVES.length; i++) if ((' ' + k + ' ').indexOf(' ' + GEO_CLAVES[i][0] + ' ') >= 0) return GEO_CLAVES[i][1];
+    return '';
+  },
+  regionImportada: function (v) {
+    const s = String(v || '').trim(); if (!s) return '';
+    const k = sinAcentos(norm(s)).replace(/^CL-/, '');
+    if (GEO_REG_ISO[k]) return GEO_REG_ISO[k];
+    return Geo.region(s);
+  },
+  buscar: function (nombre, region) {
+    Geo.iniciar();
+    const l = Geo.idx[Geo.claveBusqueda(nombre)] || Geo.idx[clave(nombre)];
+    if (!l || !l.length) return null;
+    if (region) { for (let i = 0; i < l.length; i++) if (l[i].r === region) return l[i]; }
+    return l[0];
+  },
+  deRegion: function (r) { Geo.iniciar(); return r ? Geo.lista.filter(function (o) { return o.r === r; }) : Geo.lista; },
+  estado: function (d) {
+    Geo.iniciar();
+    const reg = String(d.region || '').trim(), com = String(d.comuna || '').trim();
+    if (!reg && !com) return { ok: true };
+    if (reg && REGIONES_CL.indexOf(Geo.region(reg)) < 0) return { ok: false, msg: 'región «' + reg + '» no reconocida' };
+    if (!com) return { ok: true };
+    const l = Geo.idx[Geo.claveBusqueda(com)] || Geo.idx[clave(com)];
+    if (!l || !l.length) return { ok: true, aviso: 'comuna «' + norm(com) + '» no está en el catálogo oficial (se guarda como localidad por validar)' };
+    const rr = reg ? Geo.region(reg) : '';
+    if (rr && !l.some(function (o) { return o.r === rr; })) return { ok: false, msg: 'la comuna ' + l[0].c + ' pertenece a ' + l[0].r + ', no a ' + rr };
+    return { ok: true };
+  },
+  listas: function () {
+    Geo.iniciar();
+    let dr = document.getElementById('homRegiones');
+    if (!dr) {
+      dr = document.createElement('datalist'); dr.id = 'homRegiones';
+      dr.innerHTML = REGIONES_CL.map(function (r) { return '<option value="' + escAttr(r) + '">'; }).join('');
+      document.body.appendChild(dr);
+    }
+    let dc = document.getElementById('homComunas');
+    if (!dc) { dc = document.createElement('datalist'); dc.id = 'homComunas'; document.body.appendChild(dc); }
+    return dc;
+  },
+  poblarComunas: function (region) {
+    const dc = Geo.listas(), rr = region ? Geo.region(region) : '';
+    dc.innerHTML = Geo.deRegion(rr).map(function (o) { return '<option value="' + escAttr(o.c) + '">' + escH(o.r) + '</option>'; }).join('');
+  },
+  enlazar: function (inReg, inCom) {
+    Geo.listas();
+    inReg.setAttribute('list', 'homRegiones'); inCom.setAttribute('list', 'homComunas');
+    inReg.setAttribute('autocomplete', 'off'); inCom.setAttribute('autocomplete', 'off');
+    const aviso = document.createElement('div');
+    aviso.style.cssText = 'font-size:12px;font-weight:600;margin-top:4px;display:none;';
+    inCom.parentNode.appendChild(aviso);
+    const evaluar = function () {
+      const e = Geo.estado({ region: inReg.value, comuna: inCom.value });
+      aviso.style.display = (e.ok && !e.aviso) ? 'none' : '';
+      aviso.style.color = e.ok ? '#92400e' : '#b91c1c';
+      aviso.textContent = e.msg || e.aviso || '';
+      inCom.style.borderColor = e.ok ? '' : '#dc2626';
+      return e;
+    };
+    inReg.addEventListener('focus', function () { Geo.poblarComunas(inReg.value); });
+    inCom.addEventListener('focus', function () { Geo.poblarComunas(inReg.value); });
+    inReg.addEventListener('change', function () {
+      const r = Geo.region(inReg.value); if (r) inReg.value = r;
+      Geo.poblarComunas(inReg.value); evaluar();
+    });
+    inCom.addEventListener('change', function () {
+      const c = Geo.buscar(inCom.value, Geo.region(inReg.value));
+      if (c) { inCom.value = c.c; if (!inReg.value.trim()) inReg.value = c.r; }
+      evaluar();
+    });
+    inCom.addEventListener('input', function () { if (inCom.value.trim().length > 2) evaluar(); });
+    return evaluar;
+  }
+};
+
+function dirLimpia(d) {
+  const o = {};
+  CAMPOS_DIR.forEach(function (c) {
+    let v = String((d && d[c[0]]) == null ? '' : d[c[0]]).replace(/\s+/g, ' ').trim();
+    if (c[0] === 'rut') v = v ? Rut.canon(v) : '';
+    else if (c[0] === 'correo') v = v.toLowerCase();
+    else if (c[0] === 'telefono') v = v.replace(/[^0-9+]/g, '');
+    else v = v.toUpperCase();
+    o[c[0]] = v;
+  });
+  return o;
+}
+function dirTiene(d) { return !!d && CAMPOS_DIR.some(function (c) { return !!String(d[c[0]] || '').trim(); }); }
+function dirResumen(d) {
+  if (!d) return '';
+  return [d.nombre, [d.calle, d.numero].filter(Boolean).join(' '), d.comuna, d.region].filter(Boolean).join(' · ');
+}
+
+let _cacheEnvios = {};
+async function cargarEnvios(ids) {
+  if (!nube()) return {};
+  try {
+    const m = await __X.llamar('apiIntegracionEnvioLeer', ids && ids.length ? ids : []);
+    Object.keys(m || {}).forEach(function (k) { _cacheEnvios[k] = m[k]; });
+    return m || {};
+  } catch (e) { return {}; }
+}
+function envioCache(id) { return _cacheEnvios[id] || null; }
+
+async function abrirEnvio(erpId, alCerrar) {
+  const ped = __X.pedidoPorId ? __X.pedidoPorId(erpId) : null;
+  let env = null;
+  if (nube()) { const m = await cargarEnvios([erpId]); env = m[erpId] || null; }
+  else env = envioCache(erpId);
+  const d = (env && env.destinatario) || {};
+  const esRetiro = !!(ped && ped.type === 'retiro');
+  const host = document.createElement('div');
+  host.innerHTML = '<div class="modal open"><div class="modal-panel"><div class="modal-header"><h3>📮 Datos de envío' + (ped ? ' · ' + escH(ped.shopifyId) : '') + '</h3><button class="modal-close" id="hvX">✕</button></div><div class="modal-body">' +
+    (nube() ? '' : '<div class="warn">Sin conexión con el servidor: los datos de envío no se pueden guardar ahora.</div>') +
+    '<div class="page-subtitle">Destinatario. El RUT es opcional; si se escribe, debe ser válido. Si Satélite o el ERP lo cambian después, vale el cambio más reciente.</div>' +
+    '<div class="form-grid">' + CAMPOS_DIR.map(function (c) {
+      const extra = c[0] === 'rut' ? ' data-rut="1"' : '';
+      return '<div><label>' + c[1] + '</label><input data-c="' + c[0] + '"' + extra + ' value="' + escAttr(d[c[0]] || '') + '"></div>';
+    }).join('') + '</div>' +
+    (ped ? '<label style="display:flex;gap:8px;align-items:center;margin-top:10px;font-weight:700;"><input type="checkbox" id="hvRetiro"' + (esRetiro ? ' checked' : '') + '> PEDIDO PARA RETIRO <span class="page-subtitle">el cliente lo retira; no se despacha por courier</span></label>' : '') +
+    '</div><div class="modal-footer"><button class="btn-success btn-sm" id="hvOk">Guardar</button><button class="btn-primary btn-sm" id="hvRot">Guardar e imprimir rótulo</button><button class="btn-outline btn-sm" id="hvNo">Cancelar</button></div></div></div>';
+  document.body.appendChild(host);
+  const q = function (s) { return host.querySelector(s); };
+  const cerrar = function () { if (host.parentNode) host.parentNode.removeChild(host); if (typeof alCerrar === 'function') alCerrar(); };
+  q('#hvX').addEventListener('click', cerrar); q('#hvNo').addEventListener('click', cerrar);
+  Rut.enlazar(host);
+  const evaluar = Geo.enlazar(q('[data-c="region"]'), q('[data-c="comuna"]'));
+  const guardar = async function (imprimir) {
+    if (!Rut.revisarTodos(host)) { toast(Rut.MSG, 'error'); return; }
+    const dest = {};
+    Array.prototype.forEach.call(host.querySelectorAll('[data-c]'), function (i) { dest[i.getAttribute('data-c')] = i.value; });
+    const est = evaluar();
+    if (!est.ok) { toast('Corrija la región/comuna: ' + est.msg, 'error'); return; }
+    const limpio = dirLimpia(dest);
+    if (!nube()) { toast('Sin conexión: no se pudo guardar', 'error'); return; }
+    try {
+      await __X.llamar('apiIntegracionEnvioGuardar', erpId, { destinatario: limpio, remitente: (env && env.remitente) || { usarDefecto: true } }, usuarioNombre());
+      _cacheEnvios[erpId] = { destinatario: limpio, remitente: (env && env.remitente) || { usarDefecto: true }, act: new Date().toISOString() };
+      const chk = q('#hvRetiro');
+      if (ped && chk && chk.checked !== esRetiro && __X.pedidoCambiarTipo) __X.pedidoCambiarTipo(erpId, chk.checked ? 'retiro' : 'despacho');
+      if (ped && !ped.comuna && limpio.comuna && __X.pedidoCambiarComuna) __X.pedidoCambiarComuna(erpId, limpio.comuna);
+      host.parentNode && host.parentNode.removeChild(host);
+      toast('Datos de envío guardados', 'success');
+      if (imprimir) await rotuloPedido(erpId);
+      if (typeof alCerrar === 'function') alCerrar();
+      if (__X.integracionSat && __X.integracionSat.sincronizarPedidos) { try { await __X.integracionSat.sincronizarPedidos(); } catch (e) {} }
+    } catch (e) { toast('No se pudo guardar: ' + ((e && e.message) || e), 'error'); }
+  };
+  q('#hvOk').addEventListener('click', function () { guardar(false); });
+  q('#hvRot').addEventListener('click', function () { guardar(true); });
+}
+
+async function remitente() {
+  let r = null;
+  try { r = await __X.store.get(KEY_REMITENTE, null); } catch (e) {}
+  return r || { nombre: 'RD MUSICO', calle: '', numero: '', comuna: '', region: '', telefono: '' };
+}
+
+function htmlRotulos(items, rem) {
+  const css = '<style>@page{size:A4 portrait;margin:0}*{box-sizing:border-box}body{margin:0;font-family:Arial,Helvetica,sans-serif;color:#000}' +
+    '.hoja{width:210mm;height:297mm;page-break-after:always;position:relative}.hoja:last-child{page-break-after:auto}' +
+    '.rot{position:absolute;left:0;width:210mm;height:148.5mm;padding:9mm 12mm;overflow:hidden}.rot.a{top:0}.rot.b{top:148.5mm}' +
+    '.corte{position:absolute;left:0;top:148.5mm;width:210mm;border-top:1px dashed #888}' +
+    '.cab{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2.5pt solid #000;padding-bottom:3mm;margin-bottom:4mm}' +
+    '.cab h1{margin:0;font-size:15pt;letter-spacing:.5pt}.rem{font-size:8.5pt;line-height:1.3;text-align:right;color:#222}' +
+    '.dest{font-size:24pt;font-weight:800;line-height:1.1;margin:2mm 0;word-break:break-word}.dir{font-size:17pt;font-weight:700;line-height:1.2}' +
+    '.sub{font-size:13pt;margin-top:2mm}.cuadro{border:2.5pt solid #000;padding:2mm 4mm;font-size:22pt;font-weight:800;display:inline-block}' +
+    '.pie{position:absolute;left:12mm;right:12mm;bottom:8mm;display:flex;justify-content:space-between;align-items:flex-end}' +
+    '.ped{font-size:19pt;font-weight:800}.obs{font-size:10pt;margin-top:2mm}</style>';
+  const rots = [];
+  items.forEach(function (it) {
+    const total = Math.max(1, it.bultos || 1);
+    for (let i = 1; i <= total; i++) rots.push({ it: it, n: i, total: total });
+  });
+  const una = function (r, cls) {
+    const d = r.it.dest || {}, rm = r.it.rem || rem || {};
+    const remTxt = [rm.nombre, [rm.calle, rm.numero].filter(Boolean).join(' '), rm.comuna, rm.telefono ? 'Tel ' + rm.telefono : ''].filter(Boolean).join(' · ');
+    return '<div class="rot ' + cls + '"><div class="cab"><h1>DESPACHO RD MUSICO</h1><div class="rem">REMITE<br>' + escH(remTxt) + '</div></div>' +
+      '<div class="dest">' + escH(d.nombre || 'DESTINATARIO NO REGISTRADO') + '</div>' +
+      '<div class="dir">' + escH([d.calle, d.numero].filter(Boolean).join(' ')) + (d.referencia ? ' · ' + escH(d.referencia) : '') + '</div>' +
+      '<div class="dir">' + escH([d.comuna, d.ciudad && d.ciudad !== d.comuna ? d.ciudad : ''].filter(Boolean).join(' · ')) + '</div>' +
+      '<div class="sub">' + escH(d.region || '') + '</div>' +
+      '<div class="sub">' + escH([d.telefono ? 'Tel ' + d.telefono : '', d.rut ? 'RUT ' + Rut.formato(d.rut) : ''].filter(Boolean).join('   ·   ')) + '</div>' +
+      (r.it.obs ? '<div class="obs"><b>Obs:</b> ' + escH(r.it.obs) + '</div>' : '') +
+      '<div class="pie"><div class="ped">' + escH(r.it.etiqueta || '') + '</div><div class="cuadro">BULTO ' + r.n + '/' + r.total + '</div></div></div>';
+  };
+  let h = '';
+  for (let i = 0; i < rots.length; i += 2) {
+    h += '<div class="hoja">' + una(rots[i], 'a') + '<div class="corte"></div>' + (rots[i + 1] ? una(rots[i + 1], 'b') : '') + '</div>';
+  }
+  return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Rótulos de dirección</title>' + css + '</head><body>' + h + '<script>setTimeout(function(){window.print();},300);<\/script></body></html>';
+}
+
+function imprimirRotulos(items, rem) {
+  const w = window.open('', '_blank', 'width=900,height=700');
+  if (!w) { toast('Permite las ventanas emergentes', 'error'); return; }
+  w.document.write(htmlRotulos(items, rem)); w.document.close();
+}
+
+function bultosDe(ped) {
+  try { if (__X.bultosDePedido) return Number(__X.bultosDePedido(ped)) || 0; } catch (e) {}
+  return 0;
+}
+
+async function dialogoRotulo(items) {
+  const rem = await remitente();
+  return new Promise(function (resolve) {
+    const host = document.createElement('div');
+    host.innerHTML = '<div class="modal open"><div class="modal-panel"><div class="modal-header"><h3>🏷️ Rótulos de dirección (A4, 2 por hoja)</h3><button class="modal-close" id="hrX">✕</button></div><div class="modal-body">' +
+      '<table><thead><tr><th>Pedido</th><th>Destinatario</th><th style="width:90px;">Bultos</th></tr></thead><tbody>' +
+      items.map(function (it, i) { return '<tr><td>' + escH(it.etiqueta) + '</td><td>' + escH(dirResumen(it.dest) || '— sin datos de envío —') + '</td><td><input type="number" min="1" max="99" value="' + (it.bultos || 1) + '" data-b="' + i + '"></td></tr>'; }).join('') +
+      '</tbody></table>' +
+      '<h2 style="margin-top:12px;">Remitente</h2><div class="form-grid">' +
+      ['nombre', 'calle', 'numero', 'comuna', 'telefono'].map(function (k) { return '<div><label>' + k.charAt(0).toUpperCase() + k.slice(1) + '</label><input data-r="' + k + '" value="' + escAttr(rem[k] || '') + '"></div>'; }).join('') +
+      '</div></div><div class="modal-footer"><button class="btn-primary btn-sm" id="hrOk">🖨️ Imprimir</button><button class="btn-outline btn-sm" id="hrNo">Cancelar</button></div></div></div>';
+    document.body.appendChild(host);
+    const cerrar = function () { if (host.parentNode) host.parentNode.removeChild(host); resolve(); };
+    host.querySelector('#hrX').addEventListener('click', cerrar); host.querySelector('#hrNo').addEventListener('click', cerrar);
+    host.querySelector('#hrOk').addEventListener('click', async function () {
+      Array.prototype.forEach.call(host.querySelectorAll('[data-b]'), function (i) { items[+i.getAttribute('data-b')].bultos = Math.max(1, parseInt(i.value, 10) || 1); });
+      const r = {};
+      Array.prototype.forEach.call(host.querySelectorAll('[data-r]'), function (i) { r[i.getAttribute('data-r')] = i.value.trim(); });
+      try { await __X.store.set(KEY_REMITENTE, r); } catch (e) {}
+      imprimirRotulos(items, r);
+      cerrar();
+    });
+  });
+}
+
+async function rotuloPedido(erpId) {
+  const ped = __X.pedidoPorId ? __X.pedidoPorId(erpId) : null;
+  const m = await cargarEnvios([erpId]);
+  const env = m[erpId] || envioCache(erpId);
+  if (!env || !dirTiene(env.destinatario)) { toast('El pedido no tiene datos de envío. Complételos primero.', 'warn'); return abrirEnvio(erpId); }
+  await dialogoRotulo([{ etiqueta: ped ? 'PEDIDO ' + ped.shopifyId : '', dest: env.destinatario, bultos: bultosDe(ped) || 1, obs: ped ? ped.notes : '' }]);
+}
+
+async function rotuloVarios(ids) {
+  const m = await cargarEnvios(ids);
+  const items = [];
+  ids.forEach(function (id) {
+    const ped = __X.pedidoPorId ? __X.pedidoPorId(id) : null, env = m[id] || envioCache(id);
+    if (!env || !dirTiene(env.destinatario)) return;
+    items.push({ etiqueta: ped ? 'PEDIDO ' + ped.shopifyId : '', dest: env.destinatario, bultos: bultosDe(ped) || 1, obs: ped ? ped.notes : '' });
+  });
+  if (!items.length) { toast('Ninguno de los pedidos elegidos tiene datos de envío', 'warn'); return; }
+  await dialogoRotulo(items);
+}
+
+async function rotulosDeOT(ot) {
+  if (!ot || !(ot.mandantes || []).length) { toast('La OT no tiene documentos', 'warn'); return; }
+  const ids = ot.mandantes.map(function (m) { return m.pedidoId; }).filter(Boolean);
+  const env = ids.length ? await cargarEnvios(ids) : {};
+  const items = [], sin = [];
+  ot.mandantes.forEach(function (m, i) {
+    let dest = null;
+    const e = m.pedidoId ? (env[m.pedidoId] || envioCache(m.pedidoId)) : null;
+    if (e && dirTiene(e.destinatario)) dest = e.destinatario;
+    else {
+      const d0 = (m.direcciones || [])[0];
+      if (d0 && (d0.nombre || d0.direccion)) dest = { nombre: String(d0.nombre || m.razon || '').toUpperCase(), calle: String(d0.direccion || '').toUpperCase(), comuna: String(d0.comuna || '').toUpperCase(), region: '', telefono: String(d0.telefono || ''), rut: '' };
+    }
+    if (!dest) { sin.push(m.ordenVoucher || m.numeroDoc || ('#' + (i + 1))); return; }
+    const propios = (ot.bultos || []).filter(function (b) { return b.mandanteIdx === i || (b.mandanteId != null && String(b.mandanteId) === String(m.id)); }).length;
+    const n = m.cantidadBultosManual ? (Number(m.cantidadBultos) || 1) : (propios || Number(m.cantidadBultos) || 1);
+    items.push({ etiqueta: [m.documento === 'Pedido' ? 'PEDIDO' : (m.documento || ''), m.numeroDoc || m.ordenVoucher || ''].filter(Boolean).join(' '), dest: dest, bultos: n, obs: '' });
+  });
+  if (!items.length) { toast('Ningún documento de la OT tiene datos de envío', 'warn'); return; }
+  if (sin.length) toast('Sin datos de envío: ' + sin.join(', '), 'warn', 6000);
+  await dialogoRotulo(items);
+}
+
+async function vistaRotulosDireccion(cont) {
+  cont.innerHTML = '<div class="info">⏳ Cargando pedidos con datos de envío…</div>';
+  const peds = (__X.pedidosVigentes ? __X.pedidosVigentes() : []).filter(function (p) { return p.type === 'despacho' && p.status !== 'entregado' && p.status !== 'anulado'; });
+  const m = await cargarEnvios([]);
+  const con = peds.filter(function (p) { return m[p.id] && dirTiene(m[p.id].destinatario); });
+  cont.innerHTML = '<div class="section"><h2>📄 Rótulo de dirección A4</h2>' +
+    '<div class="page-subtitle">Pedidos de despacho abiertos con datos de envío. Marque uno o varios; cada pedido sale con tantos rótulos como bultos (2 por hoja A4, con línea de corte).</div>' +
+    '<div class="toolbar"><input id="hrBuscar" placeholder="Buscar pedido o destinatario" style="max-width:320px;"> <button class="btn-primary btn-sm" id="hrImp">🖨️ Imprimir seleccionados</button></div>' +
+    (con.length ? '<div class="table-wrap"><table><thead><tr><th></th><th>Pedido</th><th>Destinatario</th><th>Comuna</th><th>Estado</th></tr></thead><tbody id="hrFilas"></tbody></table></div>' : '<div class="info">No hay pedidos de despacho abiertos con datos de envío. Agréguelos desde Pedidos → Datos de envío o con «Pegar desde Excel/Shopify».</div>') + '</div>';
+  if (!con.length) return;
+  const pintar = function () {
+    const f = (cont.querySelector('#hrBuscar').value || '').toLowerCase();
+    cont.querySelector('#hrFilas').innerHTML = con.filter(function (p) {
+      return !f || (String(p.shopifyId) + ' ' + dirResumen(m[p.id].destinatario)).toLowerCase().indexOf(f) >= 0;
+    }).map(function (p) {
+      const d = m[p.id].destinatario;
+      return '<tr><td><input type="checkbox" class="hrChk" data-id="' + escAttr(p.id) + '"></td><td><b>' + escH(p.shopifyId) + '</b></td><td>' + escH(d.nombre || '') + '<div class="page-subtitle">' + escH([d.calle, d.numero].filter(Boolean).join(' ')) + '</div></td><td>' + escH(d.comuna || '') + '</td><td>' + escH(p.status) + '</td></tr>';
+    }).join('');
+  };
+  pintar();
+  cont.querySelector('#hrBuscar').addEventListener('input', pintar);
+  cont.querySelector('#hrImp').addEventListener('click', function () {
+    const ids = Array.prototype.map.call(cont.querySelectorAll('.hrChk:checked'), function (c) { return c.getAttribute('data-id'); });
+    if (!ids.length) { toast('Marque al menos un pedido', 'warn'); return; }
+    rotuloVarios(ids);
+  });
+}
+
+const IMP_CAMPOS = [
+  ['numero', 'N° de pedido', ['NAME', 'PEDIDO', 'NUMERODEPEDIDO', 'NUMEROPEDIDO', 'NPEDIDO', 'NROPEDIDO', 'NDEPEDIDO', 'ORDER', 'ORDERNAME', 'ORDERNUMBER', 'ORDEN', 'NUMEROORDEN', 'NUMERODEORDEN', 'TICKET', 'OC', 'NUMEROOC']],
+  ['fecha', 'Fecha', ['CREATEDAT', 'FECHA', 'FECHAPEDIDO', 'FECHADEPEDIDO', 'FECHADECREACION', 'DATE', 'PROCESSEDAT', 'PAIDAT']],
+  ['monto', 'Total', ['TOTAL', 'MONTO', 'VALOR', 'IMPORTE', 'TOTALPRICE']],
+  ['entrega', 'Forma de entrega', ['SHIPPINGMETHOD', 'FORMADEENTREGA', 'METODODEENTREGA', 'METODODEENVIO', 'METODOENVIO', 'TIPODEENTREGA', 'DELIVERYMETHOD', 'ENTREGA', 'DESPACHO', 'ENVIO']],
+  ['retiro', 'Para retiro (SÍ / NO)', ['RETIRO', 'PARARETIRO', 'RETIRAENTIENDA']],
+  ['nombre', 'Destinatario · nombre', ['SHIPPINGNAME', 'NOMBREDEENVIO', 'NOMBREENVIO', 'DESTINATARIO', 'NOMBREDESTINATARIO', 'CLIENTE', 'NOMBRECLIENTE', 'NOMBRE', 'CUSTOMER', 'BILLINGNAME']],
+  ['rut', 'Destinatario · RUT', ['RUT', 'RUN', 'RUTCLIENTE', 'RUTDESTINATARIO', 'RUTRECEPTOR']],
+  ['direccion', 'Dirección (calle y número)', ['SHIPPINGADDRESS1', 'SHIPPINGSTREET', 'DIRECCIONDEENVIO', 'DIRECCIONENVIO', 'DIRECCION', 'DIRECCION1', 'ADDRESS1', 'ADDRESS', 'CALLE']],
+  ['numeroCalle', 'Número de calle', ['NUMEROCALLE', 'NUMERODECALLE', 'NUMERODIRECCION', 'NRODIRECCION', 'NRO']],
+  ['referencia', 'Referencia / depto', ['SHIPPINGADDRESS2', 'DIRECCION2', 'REFERENCIA', 'DEPTO', 'DEPARTAMENTO', 'ADDRESS2', 'COMPLEMENTO']],
+  ['comuna', 'Comuna', ['COMUNA', 'SHIPPINGCITY', 'CITY']],
+  ['ciudad', 'Ciudad', ['CIUDAD', 'LOCALIDAD']],
+  ['region', 'Región', ['SHIPPINGPROVINCENAME', 'SHIPPINGPROVINCE', 'REGION', 'PROVINCIA', 'PROVINCE']],
+  ['telefono', 'Teléfono', ['SHIPPINGPHONE', 'TELEFONO', 'TELEFONODEENVIO', 'CELULAR', 'FONO', 'MOVIL', 'PHONE', 'BILLINGPHONE']],
+  ['correo', 'Correo', ['EMAIL', 'CORREO', 'CORREOELECTRONICO', 'MAIL']],
+  ['rutBuscar', 'Buscar RUT en (empresa / atributos)', ['SHIPPINGCOMPANY', 'BILLINGCOMPANY', 'EMPRESA', 'COMPANY', 'NOTEATTRIBUTES']],
+  ['observacion', 'Observación / notas', ['NOTES', 'NOTA', 'NOTAS', 'OBSERVACION', 'OBSERVACIONES', 'NOTE']],
+  ['cancelado', 'Cancelado el', ['CANCELLEDAT', 'CANCELADO', 'FECHACANCELACION', 'FECHADECANCELACION']]
+];
+const IMP_DESPACHO = ['entrega', 'retiro', 'nombre', 'rut', 'direccion', 'referencia', 'comuna', 'ciudad', 'region', 'telefono', 'correo'];
+const IMP_RETIRO = /RETIR|PICK ?UP|RECOG|EN TIENDA|EN BODEGA|EN LOCAL|EN SUCURSAL/;
+const IMP_MES = { ENE: 1, JAN: 1, FEB: 2, MAR: 3, ABR: 4, APR: 4, MAY: 5, JUN: 6, JUL: 7, AGO: 8, AUG: 8, SEP: 9, SET: 9, OCT: 10, NOV: 11, DIC: 12, DEC: 12 };
+const KEY_MAPAS = 'hom_imp_mapas';
+
+const Imp = {
+  k: function (h) { return sinAcentos(norm(h)).replace(/[^A-Z0-9]/g, ''); },
+  etiqueta: function (c) { const x = IMP_CAMPOS.filter(function (f) { return f[0] === c; })[0]; return x ? x[1] : ''; },
+  tabla: function (txt) {
+    txt = String(txt || '').replace(/^﻿/, '').replace(/\r\n?/g, '\n');
+    const l1 = txt.split('\n')[0] || '';
+    const sep = l1.indexOf('\t') >= 0 ? '\t' : (l1.split(';').length > l1.split(',').length ? ';' : ',');
+    const filas = []; let f = [], c = '', q = false;
+    for (let i = 0; i < txt.length; i++) {
+      const ch = txt.charAt(i);
+      if (q) { if (ch === '"') { if (txt.charAt(i + 1) === '"') { c += '"'; i++; } else q = false; } else c += ch; }
+      else if (ch === '"' && c.trim() === '') { q = true; c = ''; }
+      else if (ch === sep) { f.push(c); c = ''; }
+      else if (ch === '\n') { f.push(c); filas.push(f); f = []; c = ''; }
+      else c += ch;
+    }
+    f.push(c); filas.push(f);
+    return filas.filter(function (r) { return r.join('').trim(); });
+  },
+  mapaAuto: function (cab) {
+    return cab.map(function (h) {
+      const k = Imp.k(h); let campo = '', prio = 99;
+      IMP_CAMPOS.forEach(function (f) { const i = f[2].indexOf(k); if (i >= 0 && !campo) { campo = f[0]; prio = i; } });
+      return { campo: campo, prio: prio };
+    });
+  },
+  firma: function (cab) { return cab.map(Imp.k).join('|'); },
+  fecha: function (v) {
+    const s = String(v || '').trim(); let m;
+    if (!s) return '';
+    const p2 = function (n) { return (n < 10 ? '0' : '') + n; };
+    if (/^\d{5}(\.\d+)?$/.test(s)) { const d = new Date(Date.UTC(1899, 11, 30) + Math.floor(parseFloat(s)) * 864e5); return d.getUTCFullYear() + '-' + p2(d.getUTCMonth() + 1) + '-' + p2(d.getUTCDate()); }
+    if ((m = s.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/))) return m[1] + '-' + p2(+m[2]) + '-' + p2(+m[3]);
+    if ((m = s.match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{4})/))) return m[3] + '-' + p2(+m[2]) + '-' + p2(+m[1]);
+    const n = sinAcentos(norm(s));
+    if ((m = n.match(/(\d{1,2})\s*(?:DE\s+)?([A-Z]{3})[A-Z]*\.?(?:\s*(?:DE\s+)?(\d{4}))?/)) && IMP_MES[m[2]]) return (m[3] || new Date().getFullYear()) + '-' + p2(IMP_MES[m[2]]) + '-' + p2(+m[1]);
+    return '';
+  },
+  direccion: function (v, numCol) {
+    let s = String(v || '').trim().replace(/\s+/g, ' '), ref = '', m;
+    if (!s) return { calle: '', numero: String(numCol || '').trim(), ref: '' };
+    const c = s.indexOf(',');
+    if (c > 0) { ref = s.substr(c + 1).trim(); s = s.substr(0, c).trim(); }
+    m = s.match(/^(.*?)\s+((?:DEPTO|DPTO|DEPARTAMENTO|DEP|OF|OFICINA|CASA|BLOCK|BLOQUE|TORRE|PISO|LOCAL|PARCELA)\b.*)$/i);
+    if (m && m[1]) { s = m[1].trim(); ref = (m[2] + (ref ? ', ' + ref : '')).trim(); }
+    if (String(numCol || '').trim()) return { calle: s, numero: String(numCol).trim(), ref: ref };
+    m = s.match(/^(.+?)\s*(?:N[°ºO]\.?\s*|#\s*)?\s(\d{1,6}[A-Z]?|S\/N)$/i) || s.match(/^(.+?)\s*(?:N[°ºO]\.?\s*|#\s*)(\d{1,6}[A-Z]?)$/i);
+    if (m) return { calle: m[1].replace(/[,#]\s*$/, '').trim(), numero: m[2].toUpperCase(), ref: ref };
+    return { calle: s, numero: '', ref: ref };
+  },
+  telefono: function (v) { let d = String(v || '').replace(/\D/g, ''); if (d.length === 9 && d.charAt(0) === '9') d = '56' + d; return d.substr(0, 15); },
+  limpio: function (n) { return norm(n).replace(/^#\s*/, ''); },
+  analizar: function (txt, manual, existe) {
+    const filas = Imp.tabla(txt);
+    if (filas.length < 2) return { ok: false, error: 'No hay filas para importar. Pegue las filas con su fila de títulos.' };
+    const cab = filas[0], auto = Imp.mapaAuto(cab);
+    let guard = null;
+    try { const l = JSON.parse(localStorage.getItem(KEY_MAPAS) || '[]'), f = Imp.firma(cab); const x = l.filter(function (y) { return y.f === f; })[0]; guard = x ? x.m : null; } catch (e) {}
+    const cols = [], hay = {};
+    cab.forEach(function (h, j) {
+      const campo = manual ? (manual[j] || '') : (guard ? (guard[j] || '') : auto[j].campo);
+      let ej = ''; for (let i = 1; i < filas.length && !ej; i++) ej = String(filas[i][j] || '').trim();
+      cols.push({ h: String(h).trim(), campo: campo, prio: campo && campo === auto[j].campo ? auto[j].prio : 50 + j, ej: ej });
+      if (campo) hay[campo] = 1;
+    });
+    if (!hay.numero) return { ok: false, error: 'No se encontró la columna del N° de pedido (por ejemplo «Name» o «Pedido»). Revise los títulos o asigne las columnas a mano.', cols: cols, cab: cab };
+    const mapa = {};
+    cols.forEach(function (c, j) { if (c.campo) (mapa[c.campo] = mapa[c.campo] || []).push({ j: j, prio: c.prio }); });
+    Object.keys(mapa).forEach(function (cm) { mapa[cm].sort(function (a, b) { return a.prio - b.prio; }); });
+    const val = function (f, campo) {
+      const l = mapa[campo] || [];
+      for (let i = 0; i < l.length; i++) { const v = String(f[l[i].j] == null ? '' : f[l[i].j]).trim(); if (v) return v; }
+      return '';
+    };
+    const grupos = [], porNum = {}; let sinNum = 0;
+    for (let i = 1; i < filas.length; i++) {
+      const f = filas[i], num = Imp.limpio(val(f, 'numero'));
+      if (!num) { sinNum++; continue; }
+      let g = porNum[num];
+      if (!g) { g = porNum[num] = { numero: num, v: {}, rutTxt: [] }; grupos.push(g); }
+      IMP_CAMPOS.forEach(function (cf) { if (!g.v[cf[0]]) { const x = val(f, cf[0]); if (x) g.v[cf[0]] = x; } });
+      (mapa.rutBuscar || []).forEach(function (c) { if (String(f[c.j] || '').trim()) g.rutTxt.push(f[c.j]); });
+    }
+    const pedidos = grupos.map(function (g) {
+      const v = g.v, av = [];
+      const fecha = Imp.fecha(v.fecha);
+      if (v.fecha && !fecha) av.push({ t: 'warn', m: 'fecha «' + v.fecha + '» no reconocida: se usa hoy' });
+      const ent = sinAcentos(norm(v.entrega || '')), rv = sinAcentos(norm(v.retiro || ''));
+      const retiro = /^(SI|S|X|1|TRUE|VERDADERO|YES|RETIRO)$/.test(rv) || (!!ent && IMP_RETIRO.test(ent));
+      const dir = Imp.direccion(v.direccion, v.numeroCalle);
+      let reg = Geo.regionImportada(v.region), com = String(v.comuna || '').trim();
+      const ciu = String(v.ciudad || '').trim();
+      if (v.region && !reg) av.push({ t: 'warn', m: 'región «' + v.region + '» no reconocida' });
+      let cx = com ? Geo.buscar(com, reg) : null;
+      if (!cx && !com && ciu) { cx = Geo.buscar(ciu, reg); if (cx) com = ciu; }
+      if (cx) { com = cx.c; if (!reg) reg = cx.r; else if (cx.r !== reg) av.push({ t: 'warn', m: 'la comuna ' + cx.c + ' pertenece a ' + cx.r + ', no a ' + reg }); }
+      else if (com) av.push({ t: 'warn', m: 'comuna «' + norm(com) + '» no está en el catálogo: corríjala en Datos de envío' });
+      let rut = '';
+      if (v.rut) { if (Rut.valido(v.rut)) rut = Rut.canon(v.rut); else av.push({ t: 'err', m: 'RUT «' + v.rut + '» inválido: no se importa' }); }
+      if (!rut && !v.rut && g.rutTxt.length) rut = Rut.enTexto(g.rutTxt.join(' '));
+      const dest = dirLimpia({ rut: rut, nombre: v.nombre, region: reg, ciudad: ciu && clave(ciu) !== clave(com) ? ciu : '', comuna: com, calle: dir.calle, numero: dir.numero, referencia: [dir.ref, v.referencia].filter(function (z, i, a) { return z && a.indexOf(z) === i; }).join(' · '), telefono: Imp.telefono(v.telefono), correo: v.correo });
+      if (dest.correo && !/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(dest.correo)) { av.push({ t: 'warn', m: 'correo «' + dest.correo + '» inválido: no se importa' }); dest.correo = ''; }
+      const conDest = dirTiene(dest);
+      if (conDest && !retiro) { if (!dest.calle) av.push({ t: 'warn', m: 'falta calle' }); if (!dest.comuna) av.push({ t: 'warn', m: 'falta comuna' }); if (!dest.nombre) av.push({ t: 'warn', m: 'falta nombre' }); }
+      const p = { numero: g.numero, fecha: fecha || new Date().toISOString().slice(0, 10), monto: String(v.monto || '').replace(/[^\d.,\-]/g, ''), retiro: retiro, entrega: v.entrega || '', dest: dest, conDest: conDest, obs: String(v.observacion || '').trim(), cancelado: !!String(v.cancelado || '').trim() && !/^(no|false|0|-)$/i.test(String(v.cancelado).trim()), avisos: av };
+      const ex = existe(p.numero);
+      p.exId = ex ? ex.id : '';
+      p.cambios = [];
+      if (p.cancelado) p.accion = 'cancelado';
+      else if (!ex) p.accion = 'nuevo';
+      else {
+        if (conDest) p.cambios.push('datos de envío');
+        if (retiro && ex.type !== 'retiro') p.cambios.push('para retiro');
+        p.accion = p.cambios.length ? 'completar' : 'existe';
+      }
+      return p;
+    });
+    return { ok: true, cab: cab, cols: cols, filas: filas.length - 1, pedidos: pedidos, sinNumero: sinNum };
+  }
+};
+
+function vistaImportacion(a) {
+  const opc = function (sel) { return '<option value="">— no usar —</option>' + IMP_CAMPOS.map(function (f) { return '<option value="' + f[0] + '"' + (f[0] === sel ? ' selected' : '') + '>' + escH(f[1]) + '</option>'; }).join(''); };
+  const rec = a.cols.filter(function (c) { return c.campo; });
+  const acc = { nuevo: ['NUEVO', 'badge-green'], completar: ['COMPLETA', 'badge-blue'], existe: ['YA EXISTE', 'badge-amber'], cancelado: ['CANCELADO · SE OMITE', 'badge-red'] };
+  const n = { nuevo: 0, completar: 0, existe: 0, cancelado: 0 };
+  a.pedidos.forEach(function (p) { n[p.accion]++; });
+  const max = 80;
+  return '<div class="info">' + a.filas + ' fila(s) → <b>' + a.pedidos.length + ' pedido(s)</b> · nuevos <b>' + n.nuevo + '</b> · se completan <b>' + n.completar + '</b> · ya registrados <b>' + n.existe + '</b>' + (n.cancelado ? ' · cancelados <b>' + n.cancelado + '</b>' : '') + (a.sinNumero ? ' · filas sin N° de pedido: <b>' + a.sinNumero + '</b>' : '') + '</div>' +
+    '<details style="margin:8px 0;"><summary><b>Columnas en uso:</b> ' + rec.length + ' de ' + a.cols.length + ' — clic para cambiar la asignación</summary><div class="table-wrap"><table><thead><tr><th>Columna</th><th>Ejemplo</th><th>Se usa como</th></tr></thead><tbody>' +
+    a.cols.map(function (c, j) { return '<tr><td>' + escH(c.h || '(sin título)') + '</td><td class="page-subtitle">' + escH(c.ej.substr(0, 40)) + '</td><td><select data-ipc="' + j + '">' + opc(c.campo) + '</select></td></tr>'; }).join('') +
+    '</tbody></table></div><button class="btn-outline btn-sm" id="hiRea">Aplicar asignación</button></details>' +
+    '<div class="table-wrap" style="max-height:340px;overflow:auto;"><table><thead><tr><th>Pedido</th><th>Entrega</th><th>Destinatario</th><th>Dirección</th><th>Comuna · región</th><th>Contacto</th><th>Resultado</th></tr></thead><tbody>' +
+    a.pedidos.slice(0, max).map(function (p) {
+      const d = p.dest, ac = acc[p.accion];
+      return '<tr style="' + (p.retiro ? 'background:#e0f2fe;' : '') + '"><td><b>' + escH(p.numero) + '</b><div class="page-subtitle">' + escH(p.fecha) + (p.monto ? ' · $' + escH(p.monto) : '') + '</div></td>' +
+        '<td>' + (p.retiro ? '<span class="badge badge-blue">PARA RETIRO</span>' : '🚚 Despacho') + '</td>' +
+        '<td>' + escH(d.nombre || '—') + (d.rut ? '<div class="page-subtitle">RUT ' + escH(Rut.formato(d.rut)) + '</div>' : '') + '</td>' +
+        '<td>' + escH([d.calle, d.numero].filter(Boolean).join(' ') || '—') + (d.referencia ? '<div class="page-subtitle">' + escH(d.referencia) + '</div>' : '') + '</td>' +
+        '<td>' + escH(d.comuna || '—') + '<div class="page-subtitle">' + escH(d.region || '') + '</div></td>' +
+        '<td>' + escH(d.telefono || '') + '<div class="page-subtitle">' + escH(d.correo || '') + '</div></td>' +
+        '<td><span class="badge ' + ac[1] + '">' + ac[0] + '</span>' + (p.cambios.length ? '<div class="page-subtitle">completa: ' + escH(p.cambios.join(', ')) + '</div>' : '') +
+        p.avisos.map(function (z) { return '<div class="page-subtitle" style="color:' + (z.t === 'err' ? '#b91c1c' : '#92400e') + ';">' + escH(z.m) + '</div>'; }).join('') + '</td></tr>';
+    }).join('') + '</tbody></table></div>' + (a.pedidos.length > max ? '<div class="page-subtitle">… y ' + (a.pedidos.length - max) + ' pedido(s) más.</div>' : '');
+}
+
+async function aplicarImportacion(a) {
+  const r = { nuevos: 0, completados: 0, existentes: 0, cancelados: 0, sinConexion: 0, avisos: [] };
+  const ahora = new Date().toISOString(), usuario = usuarioNombre();
+  for (let i = 0; i < a.pedidos.length; i++) {
+    const p = a.pedidos[i];
+    if (p.accion === 'cancelado') { r.cancelados++; continue; }
+    if (p.accion === 'existe') { r.existentes++; continue; }
+    let id = p.exId;
+    if (p.accion === 'nuevo') {
+      const nuevo = __X.pedidoCrear({
+        shopifyId: '#' + p.numero, customer: p.dest.nombre || ('Pedido ' + p.numero), type: p.retiro ? 'retiro' : 'despacho', origen: 'shopify',
+        notes: [p.obs, p.monto ? 'Total $' + p.monto : ''].filter(Boolean).join(' · '), comuna: p.dest.comuna || '', total: Number(String(p.monto || '').replace(/[^\d]/g, '')) || 0,
+        createdAt: ahora, fechaPedido: p.fecha
+      }, 'Importado desde Excel/Shopify');
+      id = nuevo ? nuevo.id : '';
+      if (!id) { r.avisos.push(p.numero + ': no se pudo crear'); continue; }
+      r.nuevos++;
+    } else {
+      if (p.cambios.indexOf('para retiro') >= 0 && __X.pedidoCambiarTipo) __X.pedidoCambiarTipo(id, 'retiro');
+      r.completados++;
+    }
+    if (p.conDest && (p.accion === 'nuevo' || p.cambios.indexOf('datos de envío') >= 0)) {
+      if (!nube()) { r.sinConexion++; continue; }
+      try {
+        const actual = (await cargarEnvios([id]))[id];
+        if (actual && dirTiene(actual.destinatario) && p.accion !== 'nuevo') { r.avisos.push(p.numero + ': ya tenía datos de envío, no se reemplazan'); continue; }
+        await __X.llamar('apiIntegracionEnvioGuardar', id, { destinatario: p.dest, remitente: { usarDefecto: true } }, usuario);
+        _cacheEnvios[id] = { destinatario: p.dest, remitente: { usarDefecto: true }, act: ahora };
+      } catch (e) { r.avisos.push(p.numero + ': datos de envío no guardados (' + ((e && e.message) || e) + ')'); }
+    }
+  }
+  if (__X.pedidosRefrescar) __X.pedidosRefrescar();
+  return r;
+}
+
+function abrirImportacion() {
+  const host = document.createElement('div');
+  host.innerHTML = '<div class="modal open"><div class="modal-panel" style="max-width:1100px;width:96%;"><div class="modal-header"><h3>📋 Pegar desde Excel / Shopify</h3><button class="modal-close" id="hiX">✕</button></div><div class="modal-body">' +
+    '<div class="page-subtitle">Pegue las filas del monitor de pedidos de Shopify o de su exportación, con la fila de títulos (también puede cargar un archivo .xlsx o .csv). Las filas de un mismo pedido se agrupan; nada se duplica y los datos de envío ya guardados no se reemplazan.</div>' +
+    '<textarea id="hiTxt" rows="6" style="width:100%;font-family:monospace;font-size:12px;" placeholder="Name&#9;Created at&#9;Shipping Name&#9;Shipping Address1&#9;..."></textarea>' +
+    '<div class="toolbar"><input type="file" id="hiArch" accept=".xlsx,.xls,.csv,.txt" style="max-width:260px;"> <button class="btn-primary btn-sm" id="hiAn">🔎 Analizar</button> <button class="btn-success btn-sm" id="hiOk" disabled>Registrar</button></div>' +
+    '<div id="hiRes" style="margin-top:8px;"></div></div><div class="modal-footer"><button class="btn-outline btn-sm" id="hiNo">Cerrar</button></div></div></div>';
+  document.body.appendChild(host);
+  const q = function (s) { return host.querySelector(s); };
+  const cerrar = function () { if (host.parentNode) host.parentNode.removeChild(host); };
+  q('#hiX').addEventListener('click', cerrar); q('#hiNo').addEventListener('click', cerrar);
+  let actual = null, manual = null;
+  const existe = function (num) {
+    const k = Imp.limpio(num), l = __X.pedidosVigentes ? __X.pedidosVigentes() : [];
+    for (let i = 0; i < l.length; i++) if (Imp.limpio(l[i].shopifyId) === k) return l[i];
+    return null;
+  };
+  const analizar = function () {
+    const a = Imp.analizar(q('#hiTxt').value, manual, existe);
+    actual = a;
+    if (!a.ok) { q('#hiRes').innerHTML = '<div class="warn">' + escH(a.error) + '</div>'; q('#hiOk').disabled = true; return; }
+    q('#hiRes').innerHTML = vistaImportacion(a);
+    q('#hiOk').disabled = !a.pedidos.some(function (p) { return p.accion === 'nuevo' || p.accion === 'completar'; });
+    const rea = q('#hiRea');
+    if (rea) rea.addEventListener('click', function () {
+      const m = [];
+      Array.prototype.forEach.call(host.querySelectorAll('[data-ipc]'), function (s) { m[+s.getAttribute('data-ipc')] = s.value; });
+      manual = m;
+      try { const l = JSON.parse(localStorage.getItem(KEY_MAPAS) || '[]').filter(function (y) { return y.f !== Imp.firma(a.cab); }); l.unshift({ f: Imp.firma(a.cab), m: m }); localStorage.setItem(KEY_MAPAS, JSON.stringify(l.slice(0, 6))); } catch (e) {}
+      analizar();
+    });
+  };
+  q('#hiAn').addEventListener('click', function () { manual = null; analizar(); });
+  q('#hiArch').addEventListener('change', function (e) {
+    const f = e.target.files[0]; if (!f) return;
+    if (/\.(xlsx|xls)$/i.test(f.name)) {
+      if (typeof XLSX === 'undefined') { toast('Excel no disponible en este equipo', 'error'); return; }
+      const fr = new FileReader();
+      fr.onload = function (ev) {
+        try { const wb = XLSX.read(new Uint8Array(ev.target.result), { type: 'array', cellDates: false }); q('#hiTxt').value = XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]], { FS: '\t', blankrows: false }); manual = null; analizar(); }
+        catch (err) { toast('No se pudo leer el archivo', 'error'); }
+      };
+      fr.readAsArrayBuffer(f);
+    } else {
+      const fr = new FileReader();
+      fr.onload = function (ev) { q('#hiTxt').value = String(ev.target.result || ''); manual = null; analizar(); };
+      fr.readAsText(f);
+    }
+  });
+  q('#hiOk').addEventListener('click', async function () {
+    if (!actual || !actual.ok) return;
+    q('#hiOk').disabled = true;
+    const r = await aplicarImportacion(actual);
+    q('#hiRes').innerHTML = '<div class="info"><b>Importación lista:</b> ' + r.nuevos + ' nuevo(s) · ' + r.completados + ' completado(s) · ' + r.existentes + ' ya existían' + (r.cancelados ? ' · ' + r.cancelados + ' cancelado(s) omitidos' : '') + (r.sinConexion ? ' · <b>' + r.sinConexion + ' sin guardar datos de envío por falta de conexión</b>' : '') + '</div>' +
+      (r.avisos.length ? '<div class="warn" style="margin-top:6px;">' + r.avisos.map(escH).join('<br>') + '</div>' : '');
+    toast(r.nuevos + ' pedido(s) nuevos, ' + r.completados + ' completados', 'success');
+    if (__X.integracionSat && __X.integracionSat.sincronizarPedidos && nube()) { try { await __X.integracionSat.sincronizarPedidos(); } catch (e) {} }
+  });
+}
+
+async function datosManifiesto(mandantes) {
+  const ids = mandantes.map(function (m) { return m.pedidoId; }).filter(Boolean);
+  const env = ids.length ? await cargarEnvios(ids) : {};
+  return mandantes.map(function (m) {
+    const e = m.pedidoId ? (env[m.pedidoId] || envioCache(m.pedidoId)) : null;
+    return e && e.destinatario ? e.destinatario : null;
+  });
+}
+
+__X.homologacion = { Rut: Rut, Geo: Geo, Imp: Imp, abrirEnvio: abrirEnvio, rotuloPedido: rotuloPedido, rotuloVarios: rotuloVarios, rotulosDeOT: rotulosDeOT, vistaRotulosDireccion: vistaRotulosDireccion, abrirImportacion: abrirImportacion, cargarEnvios: cargarEnvios, envioCache: envioCache, datosManifiesto: datosManifiesto, dirResumen: dirResumen, dirTiene: dirTiene, imprimirRotulos: imprimirRotulos };
+__X.abrirEnvioPedido = abrirEnvio;
+})();
+
+window.__FIN=(window.__FIN||[]);window.__FIN.push("13_homologacion_logistica");</script>
 
 <script>window.__INICIO=(window.__INICIO||[]);window.__INICIO.push("restauracion integral");
 
