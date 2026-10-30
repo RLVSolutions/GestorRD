@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Gestor RD Musico · v20261030-0401</title>
+<title>Gestor RD Musico · v20261030-1729</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -4935,21 +4935,81 @@ function crearEstadoFiltros() { return {}; }
 
 function activo(estado, col) { return !!(estado[col] && estado[col].size > 0); }
 
+function claveOrden(v) {
+    const t = String(v == null ? '' : v).trim();
+    if (!t) return { n: null, s: '' };
+    const f = t.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})(.*)$/);
+    if (f) return { n: null, s: f[3] + '-' + f[2].padStart(2, '0') + '-' + f[1].padStart(2, '0') + f[4] };
+    if (/^-?\$?\s*-?\d[\d.]*(,\d+)?\s*%?$/.test(t) && !/^-?\d+\.\d+$/.test(t)) {
+        const n = parseFloat(t.replace(/[$\s%]/g, '').replace(/\./g, '').replace(',', '.'));
+        if (isFinite(n)) return { n: n, s: t };
+    }
+    if (/^-?\d+(\.\d+)?$/.test(t)) return { n: parseFloat(t), s: t };
+    return { n: null, s: t };
+}
+
+function ordenDe(estado) { return estado && estado.__ord ? estado.__ord : null; }
+
+function ordenar(lista, estado, getters) {
+    const o = ordenDe(estado);
+    if (!o || !o.col || !getters[o.col]) return lista;
+    const dir = o.dir === 'desc' ? -1 : 1;
+    const pares = lista.map(function (d, i) { return { d: d, i: i, k: claveOrden(getters[o.col](d)) }; });
+    pares.sort(function (a, b) {
+        let r;
+        if (a.k.n !== null && b.k.n !== null) r = a.k.n - b.k.n;
+        else if (a.k.n !== null) r = -1;
+        else if (b.k.n !== null) r = 1;
+        else r = a.k.s.localeCompare(b.k.s, 'es', { numeric: true, sensitivity: 'base' });
+        return r ? r * dir : a.i - b.i;
+    });
+    return pares.map(function (x) { return x.d; });
+}
+
 function aplicarFiltros(lista, estado, getters) {
     const cols = Object.keys(estado).filter(c => estado[c] && estado[c].size > 0);
-    if (!cols.length) return lista;
-    return lista.filter(d => cols.every(c => estado[c].has(String(getters[c](d) ?? ''))));
+    const base = cols.length ? lista.filter(d => cols.every(c => estado[c].has(String(getters[c](d) ?? '')))) : lista;
+    return ordenar(base, estado, getters);
 }
 
 function icono(col) {
     return `<span class="colf-ico" data-colf="${col}" title="Filtrar">▾</span>`;
 }
 
+function estiloOrden() {
+    if (document.getElementById('colfOrdEstilo')) return;
+    const st = document.createElement('style');
+    st.id = 'colfOrdEstilo';
+    st.textContent = '.colf-ord{cursor:pointer;margin-right:4px;font-size:.8rem;opacity:.55;user-select:none}.colf-ord:hover{opacity:1}.colf-ord.colf-ord-on{opacity:1;color:var(--primary,#6d28d9)}';
+    document.head.appendChild(st);
+}
+
 function engancharIconos(box, getters, todosLosDocs, estado, onChange) {
+    estiloOrden();
+    if (!Object.prototype.hasOwnProperty.call(estado, '__ord')) Object.defineProperty(estado, '__ord', { value: null, writable: true, enumerable: false, configurable: true });
+    const ord = estado.__ord;
     box.querySelectorAll('.colf-ico').forEach(ic => {
         const col = ic.dataset.colf;
         if (activo(estado, col)) ic.classList.add('colf-activo');
         ic.onclick = (e) => { e.stopPropagation(); _abrirPopover(box, col, getters, todosLosDocs, estado, onChange, ic); };
+        const th = ic.closest('th');
+        if (!th || !getters[col] || th.querySelector('.pr-sort') || th.querySelector('.colf-ord')) return;
+        const so = document.createElement('span');
+        so.className = 'colf-ord';
+        so.dataset.col = col;
+        const on = ord && ord.col === col;
+        so.textContent = on ? (ord.dir === 'desc' ? '▼' : '▲') : '↕';
+        so.title = 'Ordenar';
+        if (on) so.classList.add('colf-ord-on');
+        so.onclick = (e) => {
+            e.stopPropagation();
+            const a = estado.__ord;
+            if (!a || a.col !== col) estado.__ord = { col: col, dir: 'asc' };
+            else if (a.dir === 'asc') estado.__ord = { col: col, dir: 'desc' };
+            else estado.__ord = null;
+            onChange();
+        };
+        ic.parentNode.insertBefore(so, ic);
     });
 }
 
@@ -5598,6 +5658,7 @@ __X.selectorReporte = selectorReporte;
 __X.engancharReporte = engancharReporte;
 
 })();
+
 window.__FIN=(window.__FIN||[]);window.__FIN.push("03_ui");</script>
 
 <script>window.__INICIO=(window.__INICIO||[]);window.__INICIO.push("04a_comun");
@@ -14920,6 +14981,42 @@ __X.estado = estado; __X.cargarEstado = cargarEstado; __X.guardarEstado = guarda
 const { escH, toast } = __X;
 const { guardarEstado } = __X;
 
+function _maestroDe(f) {
+    const maestros = __X.docs ? __X.docs() : [];
+    return maestros.find(function(d){ return d !== f && ((f.id && d.id === f.id) || (String(d.rut||'') === String(f.rut||'') && String(d.factura||d.numero||'') === String(f.factura||f.numero||''))); }) || null;
+}
+function _claveBit(b) { return String(b.creadoEn || '') + '|' + String(b.fecha || '').slice(0, 10) + '|' + String(b.texto || '').trim(); }
+function unirBitacoraMaestra(f) {
+    if (!f || !__X.normalizarBitacora) return false;
+    const real = _maestroDe(f);
+    if (!real) return false;
+    const propias = __X.normalizarBitacora(f.bitacora);
+    const maestras = __X.normalizarBitacora(real.bitacora);
+    const vistas = new Set();
+    const union = [];
+    maestras.concat(propias).forEach(function(b){ const k = _claveBit(b); if (vistas.has(k)) return; vistas.add(k); union.push(b); });
+    union.sort(function(x, y){ return String(x.fecha || '').localeCompare(String(y.fecha || '')) || String(x.creadoEn || '').localeCompare(String(y.creadoEn || '')); });
+    const cambioF = union.length !== propias.length || !Array.isArray(f.bitacora);
+    const faltaEnMaestro = union.length !== maestras.length;
+    if (cambioF) f.bitacora = union.slice();
+    if (faltaEnMaestro) {
+        real.bitacora = union.slice();
+        if (__X.fusionarCamposCC) {
+            const u = __X.getUsuarioActual ? __X.getUsuarioActual() : null;
+            try { Promise.resolve(__X.fusionarCamposCC(real, { bitacora: real.bitacora }, u ? u.nombre : '')).catch(function(){}); } catch (e) {}
+        }
+    } else if (!Array.isArray(real.bitacora)) real.bitacora = maestras;
+    return cambioF;
+}
+function unirBitacorasCobranza(est) {
+    let n = 0;
+    ((est || __X.estado || {}).facturas || []).forEach(function(f){ if (unirBitacoraMaestra(f)) n++; });
+    if (n && __X.guardarEstado) __X.guardarEstado();
+    return n;
+}
+__X.unirBitacoraMaestra = unirBitacoraMaestra;
+__X.unirBitacorasCobranza = unirBitacorasCobranza;
+
 async function registrarGestion(facturas, texto, fechaGestion, proxGestion) {
     const fecha = fechaGestion || new Date().toISOString().split('T')[0];
     const u = __X.getUsuarioActual ? __X.getUsuarioActual() : null;
@@ -15003,6 +15100,7 @@ __X.abrirPendientesCobranza = _abrirPendientesCobranza;
 __X.abrirInformeGestion = _abrirInformeGestion;
 
 function abrirBitacoraFactura(f, host, onChange) {
+    if (__X.unirBitacoraMaestra) __X.unirBitacoraMaestra(f);
     const dibujar = () => {
         const lista = f.bitacora || [];
         host.innerHTML = `
@@ -15466,6 +15564,7 @@ function _sincronizarDeudor(box) {
 }
 
 function _refrescar(box) {
+    if (__X.unirBitacorasCobranza) __X.unirBitacorasCobranza(estado);
     const ufValor = valorUF();
     estado.facturas.forEach(f => {
         f.vencimiento = f.vencimiento || calcVencimiento(f.fechaEmision);
