@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Gestor RD Musico · v20261030-1729</title>
+<title>Gestor RD Musico · v20261104-0230</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -3602,6 +3602,103 @@ const TRANSICIONES_PV = {
     cerrado: []
 };
 
+const _FLUJO_BASE = {
+    estados: JSON.parse(JSON.stringify(ESTADOS_PV)),
+    transiciones: JSON.parse(JSON.stringify(TRANSICIONES_PV))
+};
+const ESTADOS_NUCLEO_PV = ['recepcionado', 'cerrado'];
+const GESTION_POSTVENTA_PV = ['en_stock_rma', 'en_rma'];
+const AREAS_PV_DEFECTO = [
+    { id: 'ingreso', nombre: 'Recepción / Tienda', estado: 'recepcionado', permiso: 'postventa:crear' },
+    { id: 'servicio_tecnico', nombre: 'Servicio Técnico', estado: 'en_sstt', permiso: 'postventa:sstt' },
+    { id: 'gestion_postventa', nombre: 'Gestión Post Venta', estado: 'en_stock_rma', permiso: 'postventa:admin' },
+    { id: 'rma_proveedor', nombre: 'RMA / Proveedor', estado: 'en_rma', permiso: 'postventa:gestion_rma' },
+    { id: 'tienda', nombre: 'Tienda · entrega al cliente', estado: 'retornado_tienda', permiso: 'postventa:crear' }
+];
+const KEY_FLUJO = 'pv_flujo';
+let _flujoCfg = { estados: {}, extras: [], transiciones: {}, areas: null, exigirDiagnostico: true };
+
+function _copiaFlujo(o) { return JSON.parse(JSON.stringify(o)); }
+
+function aplicarFlujoPV(cfg) {
+    const c = cfg || {};
+    _flujoCfg = {
+        estados: c.estados && typeof c.estados === 'object' ? _copiaFlujo(c.estados) : {},
+        extras: Array.isArray(c.extras) ? _copiaFlujo(c.extras) : [],
+        transiciones: c.transiciones && typeof c.transiciones === 'object' ? _copiaFlujo(c.transiciones) : {},
+        areas: Array.isArray(c.areas) && c.areas.length ? _copiaFlujo(c.areas) : null,
+        exigirDiagnostico: c.exigirDiagnostico !== false
+    };
+    Object.keys(ESTADOS_PV).forEach(function (k) { delete ESTADOS_PV[k]; });
+    Object.keys(TRANSICIONES_PV).forEach(function (k) { delete TRANSICIONES_PV[k]; });
+    Object.assign(ESTADOS_PV, _copiaFlujo(_FLUJO_BASE.estados));
+    Object.assign(TRANSICIONES_PV, _copiaFlujo(_FLUJO_BASE.transiciones));
+    _flujoCfg.extras.forEach(function (e) {
+        if (!e || !e.id || ESTADOS_PV[e.id]) return;
+        ESTADOS_PV[e.id] = { label: String(e.label || e.id), color: e.color || '#64748b', orden: 50, custom: true };
+        TRANSICIONES_PV[e.id] = [];
+    });
+    Object.keys(_flujoCfg.estados).forEach(function (k) {
+        if (!ESTADOS_PV[k]) return;
+        const o = _flujoCfg.estados[k] || {};
+        if (o.label) ESTADOS_PV[k].label = String(o.label);
+        if (o.color) ESTADOS_PV[k].color = String(o.color);
+        if (o.activo === false && ESTADOS_NUCLEO_PV.indexOf(k) === -1) ESTADOS_PV[k].activo = false;
+    });
+    Object.keys(_flujoCfg.transiciones).forEach(function (k) {
+        if (!ESTADOS_PV[k] || !Array.isArray(_flujoCfg.transiciones[k])) return;
+        TRANSICIONES_PV[k] = _flujoCfg.transiciones[k].filter(function (d) { return ESTADOS_PV[d] && d !== k; });
+    });
+    Object.keys(TRANSICIONES_PV).forEach(function (k) {
+        TRANSICIONES_PV[k] = TRANSICIONES_PV[k].filter(function (d) { return ESTADOS_PV[d] && ESTADOS_PV[d].activo !== false; });
+    });
+    return flujoPV();
+}
+
+function flujoPV() {
+    return { estados: ESTADOS_PV, transiciones: TRANSICIONES_PV, areas: areasPV(), cfg: _copiaFlujo(_flujoCfg), base: _FLUJO_BASE };
+}
+
+function areasPV() {
+    const l = _flujoCfg.areas && _flujoCfg.areas.length ? _flujoCfg.areas : AREAS_PV_DEFECTO;
+    return l.map(function (a) { return Object.assign({}, a); });
+}
+
+function exigirDiagnosticoPV() { return _flujoCfg.exigirDiagnostico !== false; }
+
+let _flujoTs = 0;
+async function cargarFlujoPV() {
+    await store.ready();
+    if (Date.now() - _flujoTs < 60000 && _flujoTs) return flujoPV();
+    _flujoTs = Date.now();
+    let cfg = await store.get(KEY_FLUJO, null);
+    if (servidorDisponible() && __X.sincronizarBlobResto) {
+        try {
+            const remoto = await __X.sincronizarBlobResto(KEY_FLUJO);
+            if (remoto && (!cfg || String(remoto.actualizado || '') > String(cfg.actualizado || ''))) {
+                cfg = remoto;
+                await store.set(KEY_FLUJO, cfg);
+            }
+        } catch (e) {}
+    }
+    aplicarFlujoPV(cfg);
+    return flujoPV();
+}
+
+async function guardarFlujoPV(cfg) {
+    const nuevo = Object.assign({}, cfg || {}, { actualizado: new Date().toISOString() });
+    await store.set(KEY_FLUJO, nuevo);
+    aplicarFlujoPV(nuevo);
+    _flujoTs = Date.now();
+    if (servidorDisponible() && __X.subirBlobResto) {
+        const r = await __X.subirBlobResto(KEY_FLUJO, Object.assign({}, nuevo));
+        if (r && r.ok === false) return { ok: false, error: r.error, local: true };
+    }
+    return { ok: true };
+}
+
+async function restaurarFlujoPV() { return guardarFlujoPV({}); }
+
 const _MOTOR_ACCIONES = {};
 function registrarMotorAccion(modulo, mapa) { _MOTOR_ACCIONES[modulo] = mapa || {}; }
 function accionSiguiente(modulo, estado) {
@@ -3647,6 +3744,7 @@ let _casos = [];
 
 async function cargarCasos() {
     await store.ready();
+    try { await cargarFlujoPV(); } catch (e) {}
     _casos = await store.lista(KEY);
     if (servidorDisponible()) {
         try {
@@ -3677,10 +3775,18 @@ function casos() {
     const u = (typeof __X.getUsuarioActual === 'function') ? __X.getUsuarioActual() : null;
     const nombre = u ? u.nombre : '';
     if (!nombre) return base;
+    const rol = __X.getRolActual ? __X.getRolActual() : null;
+    const puede = function (p) { return !!rol && typeof __X.tienePermisoGranular === 'function' && __X.tienePermisoGranular(rol, p); };
+    const bandejaSSTT = puede('postventa:sstt');
+    const bandejaGestion = puede('postventa:gestion_rma') || puede('postventa:proveedor');
     return base.filter(function(c){
-        return c.responsable === nombre || c.respSSTT === nombre || (c.rma && c.rma.responsable === nombre);
+        if (c.responsable === nombre || c.respSSTT === nombre || c.asignadoA === nombre || (c.rma && c.rma.responsable === nombre)) return true;
+        if (bandejaSSTT && c.estado === 'en_sstt' && !c.respSSTT && !c.asignadoA) return true;
+        if (bandejaGestion && ['en_stock_rma', 'en_rma', 'pendiente_proveedor', 'retornado_proveedor'].indexOf(c.estado) !== -1 && !c.asignadoA) return true;
+        return false;
     });
 }
+function casosTodos() { return _casos.filter(function(c){ return c._eliminado !== true; }); }
 function _guardar() { store.guardarLista(KEY, _casos); }
 
 async function _siguienteNumero() {
@@ -3754,7 +3860,8 @@ async function crearCaso(datos, usuario) {
         sku: datos.sku || '', serie: datos.serie || '',
         proveedor: datos.proveedor || '',
         mesesGarantia: Number(datos.mesesGarantia) || 6,
-        clasificacion: '', respSSTT: '', fechaSSTT: '', diagnostico: '',
+        clasificacion: '', respSSTT: '', fechaSSTT: '', diagnostico: '', fechaDiagnostico: '',
+        asignadoA: '', areaActual: 'ingreso',
         obsAdmin: '', facturaProveedor: '', fechaResolucion: '',
         rma: {
             proveedorId: '', facturaCompra: '', fechaCompra: '', ordenCompra: '',
@@ -3793,8 +3900,11 @@ async function transitarCaso(id, nuevoEstado, usuario, detalle, opciones = {}) {
     if (!c) return { ok: false, error: 'Caso no encontrado' };
     if (!ESTADOS_PV[nuevoEstado]) return { ok: false, error: 'Estado desconocido' };
     const forzado = !(TRANSICIONES_PV[c.estado] || []).includes(nuevoEstado);
+    if (!forzado && c.estado === 'en_sstt' && GESTION_POSTVENTA_PV.indexOf(nuevoEstado) !== -1 && exigirDiagnosticoPV() && !String(c.diagnostico || '').trim()) {
+        return { ok: false, error: 'Registre el diagnóstico técnico antes de derivar a gestión post venta' };
+    }
     if (forzado && !opciones.forzar) {
-        return { ok: false, error: `No se puede pasar de "${ESTADOS_PV[c.estado].label}" a "${ESTADOS_PV[nuevoEstado].label}"` };
+        return { ok: false, error: `No se puede pasar de "${(ESTADOS_PV[c.estado] || { label: c.estado }).label}" a "${ESTADOS_PV[nuevoEstado].label}"` };
     }
     if (forzado && opciones.forzar) {
         const rol = (typeof __X.getRolActual === 'function') ? __X.getRolActual() : null;
@@ -3835,13 +3945,16 @@ async function transitarCaso(id, nuevoEstado, usuario, detalle, opciones = {}) {
         c.fechaResolucion = '';
     }
     c.actualizado = new Date().toISOString();
-    registrarHistorial(c, `${ESTADOS_PV[anterior].label} → ${ESTADOS_PV[nuevoEstado].label}${forzado ? ' (forzado)' : ''}`, usuario, detalle);
+    registrarHistorial(c, `${(ESTADOS_PV[anterior] || { label: anterior }).label} → ${ESTADOS_PV[nuevoEstado].label}${forzado ? ' (forzado)' : ''}`, usuario, detalle);
+    const areaDestino = areasPV().find(function (a) { return a.estado === nuevoEstado; });
+    if (areaDestino) c.areaActual = areaDestino.id;
     _guardar();
     if (servidorDisponible()) {
         try {
             await llamar('apiFusionarRegistroSensible', 'postventa_casos', c.id, _serializarCaso({
                 fechaSSTT: c.fechaSSTT, fechaStockRMA: c.fechaStockRMA, fechaDevolucionVenta: c.fechaDevolucionVenta,
-                fechaEntregaCliente: c.fechaEntregaCliente, fechaResolucion: c.fechaResolucion, historial: c.historial
+                fechaEntregaCliente: c.fechaEntregaCliente, fechaResolucion: c.fechaResolucion, historial: c.historial,
+                areaActual: c.areaActual || ''
             }), c.actualizado, usuario);
             if (!huboFalloRed) c._pendienteSync = false;
         } catch(e) { huboFalloRed = true; }
@@ -3850,13 +3963,84 @@ async function transitarCaso(id, nuevoEstado, usuario, detalle, opciones = {}) {
     }
     if (huboFalloRed) c._pendienteSync = true;
     _guardar();
+    if (typeof __X.packingSincronizarCaso === 'function') { Promise.resolve(__X.packingSincronizarCaso(c)).catch(function () {}); }
     return { ok: true, caso: c, forzado };
 }
 
-async function actualizarCaso(id, cambios, usuario, etiqueta, detalle) {
+function _autorizadoDerivar() {
+    const rol = (typeof __X.getRolActual === 'function') ? __X.getRolActual() : null;
+    if (!rol || typeof __X.tienePermisoGranular !== 'function') return true;
+    return ['postventa:admin', 'postventa:control_total', 'postventa:crear', 'postventa:sstt', 'postventa:gestion_rma'].some(function (p) { return __X.tienePermisoGranular(rol, p); });
+}
+
+function _esAdminPV() {
+    const rol = (typeof __X.getRolActual === 'function') ? __X.getRolActual() : null;
+    if (!rol || typeof __X.tienePermisoGranular !== 'function') return true;
+    return __X.tienePermisoGranular(rol, 'postventa:admin') || __X.tienePermisoGranular(rol, 'postventa:control_total');
+}
+
+async function derivarCaso(id, opciones, usuario) {
     const c = obtenerCaso(id);
     if (!c) return { ok: false, error: 'Caso no encontrado' };
+    if (!_autorizadoDerivar()) return { ok: false, error: 'No tiene autorización para derivar casos' };
+    const op = opciones || {};
+    const area = areasPV().find(function (a) { return a.id === op.area; });
+    if (!area) return { ok: false, error: 'Área de derivación no válida' };
+    const destinatario = String(op.usuario || '').trim();
+    const motivo = String(op.motivo || '').trim();
+    let mover = op.transitar !== false && area.estado && area.estado !== c.estado && !!ESTADOS_PV[area.estado] && ESTADOS_PV[area.estado].activo !== false;
+    if (mover) {
+        const natural = (TRANSICIONES_PV[c.estado] || []).indexOf(area.estado) !== -1;
+        if (!natural && !_esAdminPV()) mover = false;
+        if (!natural && mover && !motivo) return { ok: false, error: 'Indique el motivo para derivar a una etapa fuera del flujo normal' };
+        if (mover) {
+            const r = await transitarCaso(c.id, area.estado, usuario, motivo || ('Derivado a ' + area.nombre), { forzar: !natural });
+            if (!r || !r.ok) return r || { ok: false, error: 'No se pudo derivar' };
+        }
+    }
+    const cambios = { areaActual: area.id, asignadoA: destinatario };
+    if (area.id === 'servicio_tecnico' && destinatario) cambios.respSSTT = destinatario;
+    const r2 = await actualizarCaso(c.id, cambios, usuario, 'Derivado a ' + area.nombre + (destinatario ? ' · ' + destinatario : ''), motivo);
+    return Object.assign({ movido: mover }, r2);
+}
+
+function viajeCaso(c) {
+    if (!c) return [];
+    const est = c.estado;
+    const D = ['en_stock_rma', 'en_rma', 'pendiente_proveedor', 'retornado_proveedor'];
+    const E = ['reparado', 'devolucion_venta', 'entrega_cliente', 'retornado_tienda', 'resuelto_espera', 'rechazado'];
+    const tuvoSSTT = !!c.fechaSSTT || est === 'en_sstt';
+    const tuvoDiag = !!String(c.diagnostico || '').trim();
+    const tuvoGestion = D.indexOf(est) !== -1 || !!c.fechaStockRMA || !!(c.rma && (c.rma.numeroRMA || c.rma.fechaEnvio));
+    let idx = 0;
+    if (est === 'en_sstt') idx = tuvoDiag ? 2 : 1;
+    else if (D.indexOf(est) !== -1) idx = 3;
+    else if (E.indexOf(est) !== -1) idx = 4;
+    else if (est === 'cerrado') idx = 5;
+    else if (!ESTADOS_PV[est] || est === 'recepcionado') idx = 0;
+    else idx = 4;
+    const visitado = [true, tuvoSSTT, tuvoDiag, tuvoGestion, E.indexOf(est) !== -1 || est === 'cerrado' || !!c.fechaResolucion, est === 'cerrado'];
+    const nombres = ['Ingreso', 'Servicio técnico', 'Diagnóstico', 'Gestión post venta', 'Resolución', 'Cierre'];
+    const fechas = [c.fechaCreacion, c.fechaSSTT, c.fechaDiagnostico, c.fechaStockRMA || (c.rma && c.rma.fechaCompra) || '', c.fechaResolucion, est === 'cerrado' ? (c.actualizado || '') : ''];
+    return nombres.map(function (n, i) {
+        let e;
+        if (i === idx && est !== 'cerrado') e = 'actual';
+        else if (i < idx || (est === 'cerrado' && i <= idx)) e = visitado[i] ? 'hecho' : 'omitido';
+        else e = 'pendiente';
+        return { id: i, label: n, estado: e, fecha: e === 'hecho' || e === 'actual' ? (fechas[i] || '') : '' };
+    });
+}
+
+async function actualizarCaso(id, cambios, usuario, etiqueta, detalle) {
+    cambios = cambios || {};
+    const c = obtenerCaso(id);
+    if (!c) return { ok: false, error: 'Caso no encontrado' };
+    const diagPrevio = String(c.diagnostico || '').trim();
     Object.keys(cambios).forEach(k => { if (k !== 'id' && k !== 'numero' && k !== 'historial' && k !== 'estado') c[k] = cambios[k]; });
+    if (cambios.diagnostico !== undefined && String(cambios.diagnostico || '').trim() && !diagPrevio && !c.fechaDiagnostico) {
+        c.fechaDiagnostico = new Date().toISOString();
+        cambios = Object.assign({}, cambios, { fechaDiagnostico: c.fechaDiagnostico });
+    }
     if (cambios.fechaVenta !== undefined || cambios.mesesGarantia !== undefined) {
         const g = validarGarantia(c.fechaVenta, c.mesesGarantia);
         c.garantiaVigente = g.vigente; c.garantiaDetalle = g.motivo;
@@ -4107,7 +4291,7 @@ registrarBuscadorUniversal('postventa', function (q) {
     });
 });
 
-__X.SLA_SSTT_HORAS = SLA_SSTT_HORAS; __X.ESTADOS_PV = ESTADOS_PV; __X.TRANSICIONES_PV = TRANSICIONES_PV; __X.ACCIONES_PV = ACCIONES_PV; __X.TIPOS_SOLICITUD = TIPOS_SOLICITUD; __X.CLASIFICACIONES = CLASIFICACIONES; __X.cargarCasos = cargarCasos; __X.casos = casos; __X.validarGarantia = validarGarantia; __X.slaCaso = slaCaso; __X.crearCaso = crearCaso; __X.obtenerCaso = obtenerCaso; __X.casosDeCliente = casosDeCliente; __X.transitarCaso = transitarCaso; __X.actualizarCaso = actualizarCaso; __X.registrarHistorial = registrarHistorial; __X.eliminarCaso = eliminarCaso; __X.indicadoresPV = indicadoresPV; __X.validarGarantiaProveedor = validarGarantiaProveedor; __X.registrarCompraRMA = registrarCompraRMA; __X.derivarAProveedor = derivarAProveedor; __X.registrarRetornoProveedor = registrarRetornoProveedor; __X.diasEnProveedor = diasEnProveedor; __X.agregarEvidencia = agregarEvidencia; __X.eliminarEvidencia = eliminarEvidencia; __X.fundamentoLegalRechazo = fundamentoLegalRechazo; __X.resolverRechazo = resolverRechazo;
+__X.SLA_SSTT_HORAS = SLA_SSTT_HORAS; __X.ESTADOS_PV = ESTADOS_PV; __X.TRANSICIONES_PV = TRANSICIONES_PV; __X.ACCIONES_PV = ACCIONES_PV; __X.TIPOS_SOLICITUD = TIPOS_SOLICITUD; __X.CLASIFICACIONES = CLASIFICACIONES; __X.cargarCasos = cargarCasos; __X.casos = casos; __X.casosTodos = casosTodos; __X.derivarCaso = derivarCaso; __X.viajeCaso = viajeCaso; __X.flujoPV = flujoPV; __X.areasPV = areasPV; __X.cargarFlujoPV = cargarFlujoPV; __X.guardarFlujoPV = guardarFlujoPV; __X.restaurarFlujoPV = restaurarFlujoPV; __X.aplicarFlujoPV = aplicarFlujoPV; __X.exigirDiagnosticoPV = exigirDiagnosticoPV; __X.ESTADOS_NUCLEO_PV = ESTADOS_NUCLEO_PV; __X.validarGarantia = validarGarantia; __X.slaCaso = slaCaso; __X.crearCaso = crearCaso; __X.obtenerCaso = obtenerCaso; __X.casosDeCliente = casosDeCliente; __X.transitarCaso = transitarCaso; __X.actualizarCaso = actualizarCaso; __X.registrarHistorial = registrarHistorial; __X.eliminarCaso = eliminarCaso; __X.indicadoresPV = indicadoresPV; __X.validarGarantiaProveedor = validarGarantiaProveedor; __X.registrarCompraRMA = registrarCompraRMA; __X.derivarAProveedor = derivarAProveedor; __X.registrarRetornoProveedor = registrarRetornoProveedor; __X.diasEnProveedor = diasEnProveedor; __X.agregarEvidencia = agregarEvidencia; __X.eliminarEvidencia = eliminarEvidencia; __X.fundamentoLegalRechazo = fundamentoLegalRechazo; __X.resolverRechazo = resolverRechazo;
 __X.registrarMotorAccion = registrarMotorAccion; __X.accionSiguiente = accionSiguiente; __X.registrarBuscadorUniversal = registrarBuscadorUniversal; __X.buscarUniversal = buscarUniversal;
 })();
 
@@ -11215,6 +11399,7 @@ async function _sincronizarOrdenes() {
                 loc.orden = r.orden; loc.fecha = r.fecha; loc.responsable = r.responsable;
                 loc.movil = r.movil; loc.observaciones = r.observaciones;
                 loc.contadorBulto = r.contadorBulto; loc.actualizado = r.actualizado;
+                loc.estadoCierre = r.estadoCierre || ''; loc.fechaCierre = r.fechaCierre || ''; loc.cerradaPor = r.cerradaPor || ''; loc.manifiestoNumero = r.manifiestoNumero || '';
             }
         });
         _ordenes = Object.keys(porId).map(function (k) { return porId[k]; });
@@ -11226,7 +11411,8 @@ async function _subirOrden(ot, usuario) {
     try {
         await llamar('apiFusionarRegistroSensible', 'packOrdenes', ot.id, {
             orden: ot.orden, fecha: ot.fecha, responsable: ot.responsable, movil: ot.movil,
-            observaciones: ot.observaciones, contadorBulto: ot.contadorBulto
+            observaciones: ot.observaciones, contadorBulto: ot.contadorBulto,
+            estadoCierre: ot.estadoCierre || '', fechaCierre: ot.fechaCierre || '', cerradaPor: ot.cerradaPor || '', manifiestoNumero: ot.manifiestoNumero || ''
         }, ot.actualizado, usuario);
     } catch (e) {  }
 }
@@ -11387,6 +11573,8 @@ async function renderPacking(box) {
     await _sincronizarOrdenes();
     _ordenActiva = (_idAct && _ordenes.find(function (o) { return o && o.id === _idAct; })) || _ordenes[0] || null;
     if (_ordenActiva) { await _refrescarItemsOT(_ordenActiva); store.guardarLista(KEY_PACK, _ordenes); }
+    store.guardarLista(KEY_PACK, _ordenes);
+    try { if (await reconciliarPackingPV()) { await _cargarEstadoPacking(); if (!_ordenActiva && _ordenes.length) _ordenActiva = _ordenes[0]; } } catch (e) {}
     _pagMand = await crearPaginador('pag_pack_mand');
     _pagBul  = await crearPaginador('pag_pack_bultos');
     _dibujar();
@@ -11424,13 +11612,54 @@ function _renderTodo() {
     _renderGastosLista();
 }
 
+function _mandActivo(m) { return !!m && m.estadoLogistico !== 'Anulado'; }
+function _bultoActivo(b) { return !!b && b.estado !== 'anulado'; }
+
 function estadoOTPacking(ot) {
     if (!ot) return 'abierta';
     const man = Array.isArray(ot.mandantes) ? ot.mandantes : [];
     const bul = Array.isArray(ot.bultos) ? ot.bultos : [];
-    if (man.length) return man.every(function (m) { return m && m.estadoLogistico === 'Despachado'; }) ? 'cerrada' : 'abierta';
-    if (bul.length) return bul.every(function (b) { return b && b.estado === 'despachado'; }) ? 'cerrada' : 'abierta';
+    if (man.length) return man.filter(_mandActivo).every(function (m) { return m.estadoLogistico === 'Despachado'; }) ? 'cerrada' : 'abierta';
+    if (bul.length) return bul.filter(_bultoActivo).every(function (b) { return b.estado === 'despachado'; }) ? 'cerrada' : 'abierta';
     return 'abierta';
+}
+
+function _mandIdxDe(b, ot) {
+    const ref = ot || _ordenActiva;
+    const ms = (ref && ref.mandantes) || [];
+    if (b && b.mandanteId) {
+        const i = ms.findIndex(function (x) { return x && String(x.id) === String(b.mandanteId); });
+        if (i >= 0) return i;
+    }
+    return b ? b.mandanteIdx : -1;
+}
+
+function _bultosDeIdx(i, ot) {
+    const ref = ot || _ordenActiva;
+    return ((ref && ref.bultos) || []).filter(function (b) { return _mandIdxDe(b, ref) === i; });
+}
+
+function _reindexarBultos(ot) {
+    (ot.bultos || []).forEach(function (b) {
+        const i = _mandIdxDe(b, ot);
+        if (i >= 0) b.mandanteIdx = i;
+    });
+}
+
+function _otAbierta() {
+    if (_ordenActiva && estadoOTPacking(_ordenActiva) !== 'cerrada') return _ordenActiva;
+    for (let i = _ordenes.length - 1; i >= 0; i--) {
+        if (_ordenes[i] && estadoOTPacking(_ordenes[i]) !== 'cerrada') { _ordenActiva = _ordenes[i]; return _ordenActiva; }
+    }
+    const o = {
+        id: nuevoId('ot-'), orden: '', fecha: hoy(),
+        responsable: '', movil: '', observaciones: '',
+        mandantes: [], bultos: [], contadorBulto: 1,
+        actualizado: new Date().toISOString()
+    };
+    _ordenes.push(o);
+    _ordenActiva = o;
+    return o;
 }
 
 let _vigOT = 'vigente';
@@ -11518,14 +11747,15 @@ function _nuevaOT() {
     _renderTodo();
 }
 
-async function _cerrarOT() {
+async function _cerrarOT(fmt) {
     const ot = _ordenActiva;
     if (!ot) { toast('Primero crea o selecciona una OT', 'warn'); return; }
     if (!_puede('packing:editar')) { toast('Sin permiso para cerrar la OT', 'warn'); return; }
     const man = ot.mandantes || [];
     const bul = ot.bultos || [];
     if (!man.length && !bul.length) { toast('La OT no tiene documentos ni bultos para despachar', 'warn'); return; }
-    const abiertos = bul.filter(function (b) { return !b.cerrado; }).length;
+    if (!man.filter(_mandActivo).length && !bul.filter(_bultoActivo).length) { toast('La OT no tiene documentos activos para despachar', 'warn'); return; }
+    const abiertos = bul.filter(function (b) { return _bultoActivo(b) && !b.cerrado; }).length;
     const detalles = [man.length + ' documento(s) · ' + bul.length + ' bulto(s)'];
     if (abiertos) detalles.push('Atención: ' + abiertos + ' bulto(s) siguen abiertos (sin dimensionar)');
     const r = await __X.confirmarAccionCritica({
@@ -11542,13 +11772,41 @@ async function _cerrarOT() {
     });
     if (!r.ok) return;
     const f = hoy();
-    man.forEach(function (m) { m.estadoLogistico = 'Despachado'; if (!m.fechaEnvio) m.fechaEnvio = f; });
-    bul.forEach(function (b) { b.estado = 'despachado'; if (!b.despachado) b.despachado = f; b.actualizado = new Date().toISOString(); });
+    const u = getUsuarioActual ? getUsuarioActual() : null;
+    man.filter(_mandActivo).forEach(function (m) { m.estadoLogistico = 'Despachado'; if (!m.fechaEnvio) m.fechaEnvio = f; m.actualizado = new Date().toISOString(); });
+    bul.filter(_bultoActivo).forEach(function (b) { b.estado = 'despachado'; if (!b.despachado) b.despachado = f; b.actualizado = new Date().toISOString(); });
+    ot.estadoCierre = 'cerrada';
+    ot.fechaCierre = new Date().toISOString();
+    ot.cerradaPor = u ? u.nombre : '';
+    ot.manifiestoNumero = ot.manifiestoNumero || ('MAN-' + String(ot.orden || ot.id).replace(/\s+/g, ''));
     ot.actualizado = new Date().toISOString();
     _guardar();
     toast('OT cerrada: ' + (ot.orden || ''), 'success');
     _renderTodo();
-    _generarReporteTransporte('manifiesto', 'pdf').catch(function (e) { toast('OT cerrada; no se pudo generar el manifiesto: ' + e.message, 'warn'); });
+    _notificarCasosPV(ot).catch(function () {});
+    _generarReporteTransporte('manifiesto', fmt === 'word' ? 'word' : 'pdf').catch(function (e) { toast('OT cerrada; no se pudo generar el manifiesto: ' + e.message, 'warn'); });
+}
+
+async function _notificarCasosPV(ot) {
+    if (!__X.obtenerCaso || !__X.actualizarCaso) return;
+    const ids = {};
+    (ot.mandantes || []).forEach(function (m) {
+        if (!m || m.estadoLogistico !== 'Despachado') return;
+        const id = m.casoId || (m.canal === 'RMA' && m.pedidoId ? m.pedidoId : '');
+        if (id) ids[id] = m;
+    });
+    const claves = Object.keys(ids);
+    if (!claves.length) return;
+    if (__X.cargarCasos) { try { await __X.cargarCasos(); } catch (e) {} }
+    const u = getUsuarioActual ? getUsuarioActual() : null;
+    for (const id of claves) {
+        const c = __X.obtenerCaso(id);
+        if (!c) continue;
+        const rma = Object.assign({}, c.rma || {});
+        if (rma.fechaEnvio) continue;
+        rma.fechaEnvio = ids[id].fechaEnvio || hoy();
+        await __X.actualizarCaso(c.id, { rma: rma }, u ? u.nombre : 'Packing', 'Despachado desde Packing', 'OT ' + (ot.orden || ot.id) + ' · manifiesto ' + (ot.manifiestoNumero || ''));
+    }
 }
 
 function _reabrirOT() {
@@ -11556,8 +11814,11 @@ function _reabrirOT() {
     if (!ot) return;
     if (!_puede('packing:editar')) { toast('Sin permiso para reabrir la OT', 'warn'); return; }
     if (!confirm('¿Reabrir la OT "' + (ot.orden || 'sin número') + '"? Volverá a Vigentes y sus documentos quedarán como Embalado.')) return;
-    (ot.mandantes || []).forEach(function (m) { m.estadoLogistico = 'Embalado'; });
-    (ot.bultos || []).forEach(function (b) { b.estado = b.cerrado ? 'dimensionado' : ''; b.despachado = ''; b.actualizado = new Date().toISOString(); });
+    (ot.mandantes || []).filter(_mandActivo).forEach(function (m) { m.estadoLogistico = 'Embalado'; });
+    (ot.bultos || []).filter(_bultoActivo).forEach(function (b) { b.estado = b.cerrado ? 'dimensionado' : ''; b.despachado = ''; b.actualizado = new Date().toISOString(); });
+    ot.estadoCierre = '';
+    ot.fechaCierre = '';
+    ot.cerradaPor = '';
     ot.actualizado = new Date().toISOString();
     _vigOT = 'vigente';
     _guardar();
@@ -11699,7 +11960,7 @@ function _renderGrillaDocumentos() {
         let dias = m.fechaEnvio ? Math.floor((hoyDate - new Date(m.fechaEnvio+'T12:00:00'))/86400000) : 0;
         const ind = m.indicador || 'A tiempo';
         const indColor = {Entregado:'#4a1b52','A tiempo':'#16a34a',Atrasado:'#dc2626',Rechazado:'#dc2626'}[ind]||'#94a3b8';
-        const nb = (_ordenActiva?.bultos||[]).filter(b => b.mandanteIdx === idx).length;
+        const nb = _bultosDeIdx(idx).filter(_bultoActivo).length;
         return '<tr>' +
             '<td style="text-align:center"><input type="checkbox" class="pkMandChk" data-idx="'+idx+'"></td>' +
             '<td style="text-align:center;font-weight:700;color:#64748b;">'+(idx+1)+'</td>' +
@@ -11727,12 +11988,12 @@ function _renderGrillaDocumentos() {
             const i = +el.dataset.i, f = el.dataset.f;
             if (f==='canal' && el.value==='__add__') { _nuevoCanal(i); return; }
             if (f==='cantidadBultos') {
-                const real=(_ordenActiva.bultos||[]).filter(b=>b.mandanteIdx===i).length;
+                const real=_bultosDeIdx(i).filter(_bultoActivo).length;
                 filas[i].cantidadBultosManual = el.value !== '' && Number(el.value)!==real;
                 filas[i].cantidadBultos = filas[i].cantidadBultosManual ? Number(el.value) : real;
             } else {
                 filas[i][f] = el.value;
-                if (f==='ordenVoucher') (_ordenActiva.bultos||[]).filter(b=>b.mandanteIdx===i).forEach(b=>{b.ordenVoucher=el.value;});
+                if (f==='ordenVoucher') _bultosDeIdx(i).forEach(b=>{b.ordenVoucher=el.value;});
             }
             _guardar();
             if (['indicador','documento','numeroDoc','cantidadBultos'].includes(f)) _renderGrillaDocumentos();
@@ -11748,9 +12009,10 @@ function _renderGrillaDocumentos() {
     tbody.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => {
         const i = +b.dataset.del;
         if (!confirm('¿Eliminar este documento y sus bultos asociados?')) return;
-        _ordenActiva.bultos = (_ordenActiva.bultos||[]).filter(bu => bu.mandanteIdx !== i);
-        (_ordenActiva.bultos||[]).forEach(bu => { if (bu.mandanteIdx > i) bu.mandanteIdx--; });
+        const idEliminado = _ordenActiva.mandantes[i] && _ordenActiva.mandantes[i].id;
+        _ordenActiva.bultos = (_ordenActiva.bultos||[]).filter(bu => !(_mandIdxDe(bu) === i || (idEliminado && String(bu.mandanteId) === String(idEliminado))));
         _ordenActiva.mandantes.splice(i, 1);
+        _reindexarBultos(_ordenActiva);
         _guardar();
         _renderGrillaDocumentos();
         _renderGrillaBultos();
@@ -11846,6 +12108,10 @@ function _abrirModalCrearBulto(mandanteIdx) {
                      '<div class="filter-field"><label>Ancho (cm)</label><input id="cbAncho" type="number" min="0" step="0.1"></div>' +
                      '<div class="filter-field"><label>Largo (cm)</label><input id="cbLargo" type="number" min="0" step="0.1"></div>' +
                      '<div class="filter-field"><label>Peso (kg)</label><input id="cbPeso" type="number" min="0" step="0.01"></div>' +
+                     '<div class="filter-field"><label>Bultos iguales</label><input id="cbRepetir" type="number" min="1" max="50" value="1" title="Crea esta misma medida varias veces"></div>' +
+                 '</div>' +
+                 '<div class="filter-bar" style="margin-top:8px;">' +
+                     '<div class="filter-field" style="flex:1;min-width:260px;"><label>Contenido (opcional, para bulto solo por medida)</label><input id="cbContenido" placeholder="Ej.: Caja con accesorios"></div>' +
                  '</div>' +
                  '<div class="filter-bar" style="margin-top:8px;">' +
                      '<div class="filter-field" style="flex:1;min-width:260px;">' +
@@ -11946,36 +12212,54 @@ function _abrirModalCrearBulto(mandanteIdx) {
     q('#cbX').addEventListener('click', cerrar);
 
     q('#cbCerrar').addEventListener('click', () => {
-        if (!lineas.length) { toast('Agrega al menos un producto al bulto', 'warn'); return; }
-        if (!_ordenActiva.bultos) _ordenActiva.bultos = [];
-        const num = _ordenActiva.contadorBulto || 1;
-        _ordenActiva.bultos.push({
-            id: nuevoId('pk-'),
-            numero: num,
-            mandanteIdx: mandanteIdx,
-            mandanteId: m.id || '',
-            otId: _ordenActiva.id,
-            referenciaTipo: m.referenciaTipo || 'OT',
-            referenciaId: m.referenciaId || _ordenActiva.id,
-            referenciaNumero: m.referenciaNumero || _ordenActiva.orden || '',
-            totalBultos: 0,
-            documento: m.documento || '',
-            numeroDoc: m.numeroDoc || '',
-            ordenVoucher: m.ordenVoucher || '',
-            alto: q('#cbAlto').value, ancho: q('#cbAncho').value, largo: q('#cbLargo').value,
-            unidadDimensiones: 'cm', peso: q('#cbPeso').value, unidadPeso: 'kg', volumenM3: 0,
-            productos: lineas.map(l => ({...l})),
-            cerrado: true,
-            fecha: hoy(),
-            estado: 'pendiente',
-            actualizado: new Date().toISOString()
-        });
-        _ordenActiva.bultos[_ordenActiva.bultos.length-1].volumenM3 = _volumenBulto(_ordenActiva.bultos[_ordenActiva.bultos.length-1]);
-        const mb = _ordenActiva.mandantes[mandanteIdx];
-        _bultosDelMandante(mb).forEach((x,i,arr)=>{x.totalBultos=arr.length;});
-        _ordenActiva.contadorBulto = num + 1;
+        const ot = _ordenActiva;
+        if (estadoOTPacking(ot) === 'cerrada') { toast('La OT está cerrada: reábrela para agregar bultos', 'warn'); return; }
+        const alto = q('#cbAlto').value, ancho = q('#cbAncho').value, largo = q('#cbLargo').value, peso = q('#cbPeso').value;
+        const hayMedida = Number(alto) > 0 && Number(ancho) > 0 && Number(largo) > 0;
+        const hayPeso = Number(peso) > 0;
+        if (!lineas.length && !hayMedida && !hayPeso) { toast('Agrega productos o informa las medidas o el peso del bulto', 'warn'); return; }
+        const msgDim = _validarDimensionesBulto({ alto: alto || 0, ancho: ancho || 0, largo: largo || 0, peso: peso || 0 }, false);
+        if (msgDim) { toast(msgDim, 'warn'); return; }
+        const veces = Math.max(1, Math.min(50, parseInt(q('#cbRepetir').value) || 1));
+        const contenido = (q('#cbContenido').value || '').trim();
+        const productos = lineas.length ? lineas.map(l => ({...l})) : [{ codigo: '', descripcion: contenido || 'Bulto por medida', cantidad: 1, precio: 0 }];
+        if (!Array.isArray(ot.bultos)) ot.bultos = [];
+        const mb = ot.mandantes[mandanteIdx];
+        let primero = null, ultimo = null;
+        for (let k = 0; k < veces; k++) {
+            const num = ot.contadorBulto || 1;
+            const nuevo = {
+                id: nuevoId('pk-'),
+                numero: num,
+                mandanteIdx: mandanteIdx,
+                mandanteId: m.id || '',
+                otId: ot.id,
+                referenciaTipo: m.referenciaTipo || 'OT',
+                referenciaId: m.referenciaId || ot.id,
+                referenciaNumero: m.referenciaNumero || ot.orden || '',
+                totalBultos: 0,
+                documento: m.documento || '',
+                numeroDoc: m.numeroDoc || '',
+                ordenVoucher: m.ordenVoucher || '',
+                alto: alto, ancho: ancho, largo: largo,
+                unidadDimensiones: 'cm', peso: peso, unidadPeso: 'kg', volumenM3: 0,
+                productos: productos.map(x => ({...x})),
+                origenMedida: lineas.length ? 'producto' : 'medida',
+                cerrado: true,
+                fecha: hoy(),
+                estado: hayMedida && hayPeso ? 'dimensionado' : 'pendiente',
+                actualizado: new Date().toISOString()
+            };
+            nuevo.volumenM3 = _volumenBulto(nuevo);
+            ot.bultos.push(nuevo);
+            ot.contadorBulto = num + 1;
+            if (primero === null) primero = num;
+            ultimo = num;
+        }
+        const propios = _bultosDeIdx(mandanteIdx, ot).filter(_bultoActivo);
+        propios.forEach(x => { x.totalBultos = propios.length; });
         _guardar();
-        toast('Bulto ' + num + ' creado', 'success');
+        toast(veces > 1 ? 'Bultos ' + primero + ' a ' + ultimo + ' creados' : 'Bulto ' + primero + ' creado', 'success');
         cerrar();
         _renderGrillaDocumentos();
         _renderGrillaBultos();
@@ -12036,7 +12320,10 @@ function _wireBultos() {
     g('#pkVoucher80').addEventListener('click', () => _abrirVoucherMandante('80'));
     g('#pkVoucherA4').addEventListener('click', () => _abrirVoucherMandante('A4'));
     g('#pkEnviaCfg').addEventListener('click', _abrirConfigEnvia);
-    if (__X.engancharReporte) __X.engancharReporte(_box, 'packRepTipo', 'packRepFmt', _generarReporteTransporte);
+    if (__X.engancharReporte) __X.engancharReporte(_box, 'packRepTipo', 'packRepFmt', function (tipo, fmt) {
+        if (tipo === 'manifiesto' && _ordenActiva && estadoOTPacking(_ordenActiva) !== 'cerrada') return _cerrarOT(fmt);
+        return _generarReporteTransporte(tipo, fmt);
+    });
 }
 
 function _renderGrillaBultos() {
@@ -12057,7 +12344,7 @@ function _renderGrillaBultos() {
 
     tbody.innerHTML = visiblesIdx.map(idx => {
         const b = bultos[idx];
-        const m = (_ordenActiva?.mandantes||[])[b.mandanteIdx] || {};
+        const m = (_ordenActiva?.mandantes||[])[_mandIdxDe(b)] || {};
         const totalCant = (b.productos||[]).reduce((s,p) => s + (Number(p.cantidad)||0), 0);
         const checked = _selBul.has(idx) ? ' checked' : '';
         return '<tr' + (_selBul.has(idx) ? ' style="background:#eff6ff;"' : '') + '>' +
@@ -12071,7 +12358,7 @@ function _renderGrillaBultos() {
             '<td>'+escH([b.alto,b.ancho,b.largo].every(v=>Number(v)>0)?[b.alto,b.ancho,b.largo].join(' × ')+' cm':'—')+'</td>' +
             '<td>'+escH(Number(b.peso)>0?Number(b.peso).toFixed(2)+' kg':'—')+'</td>' +
             '<td>'+escH(Number(b.volumenM3||_volumenBulto(b))>0?Number(b.volumenM3||_volumenBulto(b)).toFixed(4)+' m³':'—')+'</td>' +
-            '<td>'+(b.cerrado?'<span class="badge badge-green">Cerrado</span>':'<span class="badge badge-amber">Abierto</span>')+'</td>' +
+            '<td>'+(b.estado==='despachado'?'<span class="badge badge-blue">Despachado</span>':(b.estado==='anulado'?'<span class="badge badge-red">Anulado</span>':(b.cerrado?'<span class="badge badge-green">Cerrado</span>':'<span class="badge badge-amber">Abierto</span>')))+'</td>' +
             '<td style="white-space:nowrap;">'+escH(b.fecha || '—')+'</td>' +
             '<td style="white-space:nowrap;">' +
                 '<button class="btn-icon btn-secondary" data-edit="'+idx+'" title="Editar">✏️</button>' +
@@ -12135,7 +12422,7 @@ function _etiquetaBultoIndividual(idx) {
 
 function _imprimirEtiquetasDeBultos(lista) {
     const grupos = {};
-    lista.forEach(b => { (grupos[b.mandanteIdx] = grupos[b.mandanteIdx] || []).push(b); });
+    lista.forEach(b => { const k = _mandIdxDe(b); (grupos[k] = grupos[k] || []).push(b); });
     const items = [];
     Object.entries(grupos).forEach(([midx, arr]) => {
         arr.forEach((b, i) => {
@@ -12517,58 +12804,106 @@ async function _importarDesdePedidos() {
     });
 }
 
-function crearSolicitudPackingRMA(caso, proveedor) {
+function _mandanteDeCaso(m, casoId) {
+    return !!m && _mandActivo(m) && (m.casoId === casoId || (m.canal === 'RMA' && String(m.pedidoId || '') === String(casoId)));
+}
+
+async function crearSolicitudPackingRMA(caso, proveedor) {
     if (!caso) return { ok: false, error: 'Caso no valido' };
     try {
-    if (!_ordenActiva) {
-        const o = {
-            id: nuevoId('ot-'), orden: '', fecha: hoy(),
-            responsable: '', movil: '', observaciones: '',
-            mandantes: [], bultos: [], contadorBulto: 1,
+        await _cargarEstadoPacking();
+        for (const o of _ordenes) {
+            const i = (o.mandantes || []).findIndex(function (m) { return _mandanteDeCaso(m, caso.id) && m.estadoLogistico !== 'Despachado'; });
+            if (i >= 0) {
+                const m = o.mandantes[i];
+                const bu = (o.bultos || []).find(function (x) { return _mandIdxDe(x, o) === i && _bultoActivo(x); });
+                return { ok: true, repetido: true, mandanteId: m.id, bultoId: bu ? bu.id : '', otId: o.id };
+            }
+        }
+        const ot = _otAbierta();
+        if (!Array.isArray(ot.mandantes)) ot.mandantes = [];
+        if (!Array.isArray(ot.bultos)) ot.bultos = [];
+        const ticket = (caso.rma && caso.rma.numeroRMA) ? caso.rma.numeroRMA : (caso.numero || caso.id);
+        const mandanteId = nuevoId('mnd-');
+        ot.mandantes.push(_normalizarMandante({
+            id: mandanteId,
+            canal: 'RMA',
+            ordenVoucher: String(ticket || ''),
+            documento: 'RMA', numeroDoc: String(ticket || ''),
+            cantidadBultos: 1, fechaEmision: hoy(), fechaEnvio: hoy(),
+            indicador: 'A tiempo', direcciones: proveedor ? [{ direccion: proveedor.direccion || '', comuna: proveedor.comuna || '', contacto: proveedor.contacto || '', telefono: proveedor.telefono || '' }] : [],
+            rut: proveedor ? (proveedor.rut || '') : '',
+            razon: proveedor ? (proveedor.nombre || proveedor.razon || '') : '',
+            origenRMA: true, casoId: caso.id, pedidoId: caso.id,
             actualizado: new Date().toISOString()
-        };
-        _ordenes.push(o);
-        _ordenActiva = o;
-    }
-    if (!_ordenActiva.mandantes) _ordenActiva.mandantes = [];
-    if (!_ordenActiva.bultos) _ordenActiva.bultos = [];
-
-    const ticket = (caso.rma && caso.rma.numeroRMA) ? caso.rma.numeroRMA : (caso.numero || caso.id);
-    const mandanteId = nuevoId('mnd-');
-    _ordenActiva.mandantes.push({
-        id: mandanteId,
-        canal: 'RMA',
-        ordenVoucher: String(ticket || ''),
-        documento: '', numeroDoc: '',
-        cantidadBultos: 1, fechaEmision: hoy(), fechaEnvio: hoy(),
-        indicador: 'A tiempo', direcciones: [],
-        rut: proveedor ? (proveedor.rut || '') : '',
-        razon: proveedor ? (proveedor.nombre || proveedor.razon || '') : '',
-        origenRMA: true, casoId: caso.id,
-        actualizado: new Date().toISOString()
-    });
-
-    const mandanteIdx = _ordenActiva.mandantes.length - 1;
-    const num = _ordenActiva.contadorBulto || 1;
-    const bultoId = nuevoId('pk-');
-    _ordenActiva.bultos.push({
-        id: bultoId,
-        numero: num,
-        mandanteIdx: mandanteIdx,
-        documento: '', numeroDoc: '', ordenVoucher: String(ticket || ''),
-        productos: [{ codigo: caso.sku || '', descripcion: caso.descripcion || (caso.marca ? caso.marca + ' ' + (caso.modelo || '') : ''), cantidad: 1 }],
-        cerrado: true, fecha: hoy(), estado: 'pendiente',
-        origenRMA: true, casoId: caso.id,
-        actualizado: new Date().toISOString()
-    });
-    _ordenActiva.contadorBulto = num + 1;
-    _guardar();
-    return { ok: true, mandanteId: mandanteId, bultoId: bultoId, otId: _ordenActiva.id };
+        }, ot));
+        const mandanteIdx = ot.mandantes.length - 1;
+        const num = ot.contadorBulto || 1;
+        const bultoId = nuevoId('pk-');
+        ot.bultos.push(_normalizarBulto({
+            id: bultoId,
+            numero: num,
+            mandanteIdx: mandanteIdx,
+            mandanteId: mandanteId,
+            documento: 'RMA', numeroDoc: String(ticket || ''), ordenVoucher: String(ticket || ''),
+            productos: [{ codigo: caso.sku || '', descripcion: caso.descripcion || (caso.marca ? caso.marca + ' ' + (caso.modelo || '') : ''), cantidad: 1 }],
+            cerrado: true, fecha: hoy(), estado: 'pendiente',
+            origenRMA: true, casoId: caso.id,
+            actualizado: new Date().toISOString()
+        }, mandanteIdx, ot));
+        ot.contadorBulto = num + 1;
+        _guardar();
+        return { ok: true, mandanteId: mandanteId, bultoId: bultoId, otId: ot.id };
     } catch (e) {
         return { ok: false, error: e.message };
     }
 }
 
+const _ESTADOS_PV_POST_ENVIO = ['retornado_proveedor', 'devolucion_venta', 'entrega_cliente', 'reparado', 'retornado_tienda', 'resuelto_espera', 'cerrado'];
+const _ESTADOS_PV_SIN_ENVIO = ['rechazado', 'cerrado', 'devolucion_venta', 'entrega_cliente', 'reparado', 'retornado_tienda', 'resuelto_espera'];
+
+function _reconciliarOT(ot, caso) {
+    let cambio = false;
+    const rma = caso.rma || {};
+    const envio = rma.fechaEnvio || '';
+    const retorno = rma.fechaRetorno || '';
+    (ot.mandantes || []).forEach(function (m, i) {
+        if (!_mandanteDeCaso(m, caso.id)) return;
+        const bultos = _bultosDeIdx(i, ot).filter(_bultoActivo);
+        if (envio && _ESTADOS_PV_POST_ENVIO.indexOf(caso.estado) !== -1) {
+            if (m.estadoLogistico !== 'Despachado') { m.estadoLogistico = 'Despachado'; cambio = true; }
+            if (!m.fechaEnvio || m.fechaEnvio !== envio) { m.fechaEnvio = envio; cambio = true; }
+            if (retorno && m.indicador !== 'Entregado') { m.indicador = 'Entregado'; cambio = true; }
+            bultos.forEach(function (b) { if (b.estado !== 'despachado') { b.estado = 'despachado'; b.despachado = envio; cambio = true; } });
+        } else if (!envio && _ESTADOS_PV_SIN_ENVIO.indexOf(caso.estado) !== -1) {
+            if (m.estadoLogistico !== 'Anulado') { m.estadoLogistico = 'Anulado'; m.motivoAnulacion = 'Caso ' + (caso.numero || caso.id) + ' ' + caso.estado + ' sin envío'; cambio = true; }
+            bultos.forEach(function (b) { if (b.estado !== 'anulado') { b.estado = 'anulado'; cambio = true; } });
+        }
+    });
+    if (cambio) ot.actualizado = new Date().toISOString();
+    return cambio;
+}
+
+async function packingSincronizarCaso(caso) {
+    if (!caso || !caso.id) return 0;
+    await _cargarEstadoPacking();
+    let n = 0;
+    const u = getUsuarioActual ? getUsuarioActual() : null;
+    _ordenes.forEach(function (ot) {
+        if (_reconciliarOT(ot, caso)) { n++; _subirOrden(ot, u ? u.nombre : ''); _subirItemsOT(ot); }
+    });
+    if (n) store.guardarLista(KEY_PACK, _ordenes);
+    return n;
+}
+
+async function reconciliarPackingPV() {
+    if (!__X.cargarCasos) return 0;
+    await __X.cargarCasos();
+    const lista = __X.casosTodos ? __X.casosTodos() : [];
+    let n = 0;
+    for (const c of lista) { n += await packingSincronizarCaso(c); }
+    return n;
+}
 
 async function _generarReporteTransporte(tipo, fmt) {
     const titulo = tipo==='ordenTransporte'?'Orden de Transporte':tipo==='manifiesto'?'Manifiesto de Envío':'Lista de Bultos';
@@ -12581,7 +12916,8 @@ async function _generarReporteTransporte(tipo, fmt) {
     const pesoKg = b => { const v = Number(b.peso)||0; return b.unidadPeso === 'g' ? v/1000 : v; };
     let totBultos = 0, totPeso = 0, totVol = 0;
     const filasMand = mandantes.map((m,i) => {
-        const propios = bultos.filter(b => b.mandanteIdx === i || (b.mandanteId != null && String(b.mandanteId) === String(m.id)));
+        if (!_mandActivo(m)) return '';
+        const propios = bultos.filter(b => _mandIdxDe(b, ot) === i && _bultoActivo(b));
         const nb = m.cantidadBultosManual ? (Number(m.cantidadBultos)||0) : propios.length;
         const peso = propios.reduce((t,b) => t + pesoKg(b), 0);
         const vol = propios.reduce((t,b) => t + (Number(b.volumenM3)||0), 0);
@@ -12595,7 +12931,7 @@ async function _generarReporteTransporte(tipo, fmt) {
         <td>${escH(m.fechaEnvio||'')}</td><td>${escH(m.indicador||'')}</td></tr>`;
     }).join('');
     const fBultos = tipo==='ordenTransporte' ? bultos.map(b => {
-        const m = mandantes[b.mandanteIdx]||{};
+        const m = mandantes[_mandIdxDe(b, ot)]||{};
         return `<tr><td>${b.numero}</td><td>${escH(m.ordenVoucher||b.ordenVoucher||'—')}</td><td>${escH(m.numeroDoc||'')}</td><td>${escH(m.canal||'')}</td>
         <td>${escH((b.productos||[]).map(p => `${p.cantidad}x ${p.descripcion}`).join(', '))}</td>
         <td>${b.cerrado ? 'Cerrado' : 'Abierto'}</td></tr>`;
@@ -12608,7 +12944,7 @@ async function _generarReporteTransporte(tipo, fmt) {
     <thead style="background:#1e40af;color:#fff;"><tr><th>#</th><th>Orden/Voucher</th><th>Documento</th><th>Canal</th>
     <th>Destinatario</th><th>Comuna · región</th><th>Bultos</th><th>Peso kg</th><th>F.Envío</th><th>Indicador</th></tr></thead>
     <tbody>${filasMand}</tbody>
-    <tfoot><tr style="font-weight:bold;background:#f1f5f9;"><td colspan="6" style="text-align:right">TOTAL (${mandantes.length} documento(s))</td><td style="text-align:center">${totBultos}</td><td style="text-align:right">${totPeso ? totPeso.toFixed(2) : '—'}</td><td colspan="2">${totVol ? 'Vol. ' + totVol.toFixed(3) + ' m³' : ''}</td></tr></tfoot></table>
+    <tfoot><tr style="font-weight:bold;background:#f1f5f9;"><td colspan="6" style="text-align:right">TOTAL (${mandantes.filter(_mandActivo).length} documento(s))</td><td style="text-align:center">${totBultos}</td><td style="text-align:right">${totPeso ? totPeso.toFixed(2) : '—'}</td><td colspan="2">${totVol ? 'Vol. ' + totVol.toFixed(3) + ' m³' : ''}</td></tr></tfoot></table>
     ${tipo==='ordenTransporte'&&bultos.length?`<h2 style="margin-top:16pt;">Detalle de Bultos</h2>
     <table border="1" style="width:100%;border-collapse:collapse;font-size:9pt;">
     <thead style="background:#1e40af;color:#fff;"><tr><th>N° Bulto</th><th>Orden/Voucher</th><th>Documento</th><th>Canal</th><th>Productos</th><th>Estado</th></tr></thead>
@@ -12783,21 +13119,20 @@ async function _satSincronizar(op) {
     }
 }
 
-async function agregarDesdeExterno({ canal, documento, numeroDoc, cantidadBultos, orden, ordenVoucher, direcciones, pedidoId, rut, razon, productosPacking }) {
+async function agregarDesdeExterno({ canal, documento, numeroDoc, cantidadBultos, orden, ordenVoucher, direcciones, pedidoId, rut, razon, productosPacking, casoId }) {
     await _cargarEstadoPacking();
-    if (!_ordenActiva && _ordenes.length) _ordenActiva = _ordenes[_ordenes.length - 1];
-    if (!_ordenActiva) {
-        const o = {
-            id: nuevoId('ot-'), orden:'', fecha:hoy(),
-            responsable:'', movil:'', observaciones:'',
-            mandantes:[], bultos:[], contadorBulto:1,
-            actualizado: new Date().toISOString()
-        };
-        _ordenes.push(o); _ordenActiva = o;
+    if (canal === 'RMA' && (casoId || pedidoId)) {
+        const clave = casoId || pedidoId;
+        for (const o of _ordenes) {
+            const previo = (o.mandantes || []).find(function (m) { return _mandanteDeCaso(m, clave) && m.estadoLogistico !== 'Despachado'; });
+            if (previo) return { ok: true, repetido: true, otId: o.id, mandanteId: previo.id };
+        }
     }
-    if (!Array.isArray(_ordenActiva.mandantes)) _ordenActiva.mandantes = [];
-    _ordenActiva.mandantes.push({
-        id: nuevoId('mnd-'),
+    const ot = _otAbierta();
+    if (!Array.isArray(ot.mandantes)) ot.mandantes = [];
+    const mandanteId = nuevoId('mnd-');
+    ot.mandantes.push(_normalizarMandante({
+        id: mandanteId,
         canal: canal || _canales[0] || '',
         ordenVoucher: ordenVoucher || orden || '',
         documento: documento || 'Factura',
@@ -12806,11 +13141,13 @@ async function agregarDesdeExterno({ canal, documento, numeroDoc, cantidadBultos
         fechaEmision: hoy(), fechaEnvio: hoy(),
         indicador: 'A tiempo', direcciones: direcciones || [],
         pedidoId: pedidoId || '', rut: rut || '', razon: razon || '',
+        casoId: casoId || (canal === 'RMA' ? pedidoId || '' : ''),
+        origenRMA: canal === 'RMA',
         productosPacking: Array.isArray(productosPacking) ? productosPacking : [],
         actualizado: new Date().toISOString()
-    });
+    }, ot));
     _guardar();
-    return { ok: true };
+    return { ok: true, otId: ot.id, mandanteId: mandanteId };
 }
 async function agregarFilaDesdeExterno(params) { return agregarDesdeExterno(params); }
 
@@ -12823,6 +13160,8 @@ __X.imprimirVoucherBultos = _imprimirVoucherBultos;
 __X.agregarDesdeExterno     = agregarDesdeExterno;
 __X.agregarFilaDesdeExterno = agregarFilaDesdeExterno;
 __X.crearSolicitudPackingRMA = crearSolicitudPackingRMA;
+__X.packingSincronizarCaso = packingSincronizarCaso;
+__X.reconciliarPackingPV = reconciliarPackingPV;
 __X.reporteTransporte = _generarReporteTransporte;
 __X.bultosDePedido = function (p) {
     if (!p || !p.id) return 0;
@@ -21564,7 +21903,7 @@ async function _efectoDestino(c, destino, usuario) {
         c.rma.numeroRMA = c.rma.numeroRMA || ('RMA-' + String(c.numero || '').replace('PV-', ''));
         var proveedor = (c.rma.proveedorId && typeof buscarProveedorPV === 'function') ? buscarProveedorPV(c.rma.proveedorId) : null;
         if (typeof __X.crearSolicitudPackingRMA === 'function') {
-            var r = __X.crearSolicitudPackingRMA(c, proveedor);
+            var r = await __X.crearSolicitudPackingRMA(c, proveedor);
             if (r && r.ok) {
                 c.rma.packingRef = { otId: r.otId, mandanteId: r.mandanteId, bultoId: r.bultoId };
                 registrarHistorial(c, 'Solicitud de despacho creada en Packing', usuario,
@@ -21678,6 +22017,84 @@ function _reponerStock(c, cant) {
     var p = getProducto(cod);
     if (!p) return;
     patchProducto(cod, { stock: (Number(p.stock) || 0) + (Number(cant) || 1) });
+}
+
+function _esAdmin(rol) {
+    return tienePermiso(rol, 'postventa:admin') || tienePermiso(rol, 'postventa:control_total');
+}
+
+function _viajeHtml(c) {
+    var pasos = __X.viajeCaso(c);
+    var col = { hecho: '#16a34a', actual: '#2563eb', omitido: '#cbd5e1', pendiente: '#e2e8f0' };
+    var txt = { hecho: '✓', actual: '●', omitido: '–', pendiente: '' };
+    var fx = function(f) { return f ? String(f).slice(0, 10) : ''; };
+    var area = (__X.areasPV().find(function(a) { return a.id === c.areaActual; }) || {}).nombre || '';
+    return '<div style="display:flex;gap:4px;margin:0 0 12px;align-items:flex-start;flex-wrap:wrap;">' +
+        pasos.map(function(p) {
+            return '<div style="flex:1;min-width:92px;text-align:center;">' +
+                '<div style="height:6px;border-radius:3px;background:' + col[p.estado] + ';margin-bottom:5px;"></div>' +
+                '<div style="font-size:11px;font-weight:' + (p.estado === 'actual' ? '800' : '600') + ';color:' + (p.estado === 'pendiente' || p.estado === 'omitido' ? '#94a3b8' : '#0f172a') + ';">' + txt[p.estado] + ' ' + escH(p.label) + '</div>' +
+                '<div style="font-size:10px;color:#94a3b8;">' + escH(fx(p.fecha)) + '</div></div>';
+        }).join('') +
+        '</div>' +
+        (area || c.asignadoA ? '<div class="page-subtitle" style="margin:-6px 0 10px;">Área actual: <b>' + escH(area || '—') + '</b>' + (c.asignadoA ? ' · Asignado a: <b>' + escH(c.asignadoA) + '</b>' : '') + '</div>' : '');
+}
+
+async function _modalDerivar(c, forzado, alTerminar) {
+    var u = getUsuarioActual();
+    var nu = u ? u.nombre : 'Sistema';
+    var areas = __X.areasPV();
+    var usuarios = [];
+    try {
+        var perm = await Promise.all([__X.usuariosConPermiso('postventa:sstt'), __X.usuariosConPermiso('postventa:admin'), __X.usuariosConPermiso('postventa:gestion_rma'), __X.usuariosConPermiso('postventa:crear')]);
+        var vistos = {};
+        perm.forEach(function(l) { (l || []).forEach(function(x) { if (!vistos[x.id]) { vistos[x.id] = 1; usuarios.push(x); } }); });
+    } catch (err) {}
+    var d = document.createElement('div');
+    document.body.appendChild(d);
+    var cerrar = function() { if (d.parentNode) d.parentNode.removeChild(d); };
+    var estados = Object.keys(ESTADOS_PV).filter(function(k) { return ESTADOS_PV[k].activo !== false && k !== c.estado; })
+        .sort(function(a, b) { return (ESTADOS_PV[a].orden || 0) - (ESTADOS_PV[b].orden || 0); });
+    d.innerHTML = __X.fichaOperativa({
+        idCerrar: 'dvX',
+        titulo: (forzado ? '⚡ Forzar etapa · ' : '↪ Derivar · ') + escH(c.numero),
+        cuerpo: '<div class="form-grid-2col">' +
+            (forzado ?
+                '<div><label>Etapa destino</label><select id="dvEstado">' + estados.map(function(k) { return '<option value="' + escAttr(k) + '">' + escH(ESTADOS_PV[k].label) + '</option>'; }).join('') + '</select></div>'
+              : '<div><label>Área destino</label><select id="dvArea">' + areas.map(function(a) { return '<option value="' + escAttr(a.id) + '"' + (a.id === c.areaActual ? ' selected' : '') + '>' + escH(a.nombre) + '</option>'; }).join('') + '</select></div>') +
+            '<div><label>Asignar a (opcional)</label><select id="dvUsuario"><option value="">Bandeja del área</option>' +
+                usuarios.map(function(x) { return '<option value="' + escAttr(x.nombre) + '"' + (x.nombre === c.asignadoA ? ' selected' : '') + '>' + escH(x.nombre) + '</option>'; }).join('') + '</select></div>' +
+            '<div style="grid-column:1/-1;"><label>Motivo' + (forzado ? ' (obligatorio)' : '') + '</label><textarea id="dvMotivo" rows="3"></textarea></div>' +
+            '</div><div id="dvErr" style="color:#b91c1c;font-size:12px;margin-top:6px;"></div>',
+        pie: '<button class="btn-success btn-sm" id="dvOk">Confirmar</button><button class="btn-outline btn-sm" id="dvNo">Cancelar</button>'
+    });
+    d.querySelector('#dvX').addEventListener('click', cerrar);
+    d.querySelector('#dvNo').addEventListener('click', cerrar);
+    d.querySelector('#dvOk').addEventListener('click', async function() {
+        var motivo = (d.querySelector('#dvMotivo').value || '').trim();
+        var usuarioSel = d.querySelector('#dvUsuario').value;
+        var err = d.querySelector('#dvErr');
+        var r;
+        if (forzado) {
+            if (!motivo) { err.textContent = 'Indique el motivo'; return; }
+            var destino = d.querySelector('#dvEstado').value;
+            r = await transitarCaso(c.id, destino, nu, motivo, { forzar: true });
+            if (!r || !r.ok) { err.textContent = (r && r.error) || 'No se pudo mover'; return; }
+            try { await _efectoDestino(obtenerCaso(c.id), destino, nu); } catch (e2) { toast('Etapa cambiada, pero falló el efecto: ' + ((e2 && e2.message) || e2), 'warn'); }
+            if (usuarioSel !== (c.asignadoA || '')) await actualizarCaso(c.id, { asignadoA: usuarioSel }, nu, 'Asignación', usuarioSel);
+        } else {
+            var area = d.querySelector('#dvArea').value;
+            var ar = areas.find(function(a) { return a.id === area; });
+            var antes = c.estado;
+            r = await __X.derivarCaso(c.id, { area: area, usuario: usuarioSel, motivo: motivo }, nu);
+            if (!r || !r.ok) { err.textContent = (r && r.error) || 'No se pudo derivar'; return; }
+            var despues = obtenerCaso(c.id);
+            if (despues && despues.estado !== antes && ar) { try { await _efectoDestino(despues, despues.estado, nu); } catch (e3) { toast('Derivado, pero falló el efecto: ' + ((e3 && e3.message) || e3), 'warn'); } }
+        }
+        toast(forzado ? 'Etapa forzada' : 'Caso derivado', 'success');
+        cerrar();
+        if (alTerminar) alTerminar();
+    });
 }
 
 function _siguientesPermitidos(c, rol) {
@@ -22297,7 +22714,8 @@ function _detalle(id, ext) {
         '</div>' +
         '<div class="modal-body">' +
 
-            __X.bannerSiguienteAccion({ etapa: e.label, accion: __X.accionSiguiente('postventa', c.estado), responsable: c.respSSTT || c.responsable }) +
+            __X.bannerSiguienteAccion({ etapa: e.label, accion: __X.accionSiguiente('postventa', c.estado), responsable: c.asignadoA || c.respSSTT || c.responsable }) +
+            _viajeHtml(c) +
 
             '<div class="kpi-grid" style="margin-bottom:12px;">' +
                 '<div class="kpi"><div class="kpi-label">Garantía</div>' +
@@ -22382,6 +22800,8 @@ function _detalle(id, ext) {
             '<button class="btn-success btn-sm" id="pvGuardarTodo">💾 Guardar cambios</button>' +
             '<span style="width:1px;height:26px;background:#e2e8f0;margin:0 6px;"></span>' +
             (siguientes.length ? '<span style="font-size:11px;font-weight:700;color:#64748b;align-self:center;">DECISIÓN →</span>' : '') +
+            (c.estado !== 'cerrado' && (tienePermiso(rol, 'postventa:admin') || tienePermiso(rol, 'postventa:sstt') || tienePermiso(rol, 'postventa:crear') || tienePermiso(rol, 'postventa:gestion_rma')) ? '<button class="btn-secondary btn-sm" id="pvDerivar">↪ Derivar</button>' : '') +
+            (c.estado !== 'cerrado' && _esAdmin(rol) ? '<button class="btn-danger btn-sm" id="pvForzar">⚡ Forzar etapa</button>' : '') +
             _siguientesPermitidos(c, rol).map(n => '<button class="btn-primary btn-sm" data-estado="' + n + '">→ ' + escH(ESTADOS_PV[n].label) + '</button>').join('') +
             (c.estado === 'en_stock_rma' ? '<button class="btn-secondary btn-sm" id="pvGestionarRMA">📋 Gestionar RMA</button>' : '') +
             (c.estado === 'en_stock_rma' ? '<button class="btn-danger btn-sm" id="pvMerma">🗑️ Dar de baja (merma)</button>' : '') +
@@ -22510,6 +22930,11 @@ function _detalle(id, ext) {
             });
         });
     });
+
+    var btnDer = q('#pvDerivar');
+    if (btnDer) btnDer.addEventListener('click', function() { _modalDerivar(c, false, function() { cerrar(); refrescarVista(); }); });
+    var btnFor = q('#pvForzar');
+    if (btnFor) btnFor.addEventListener('click', function() { _modalDerivar(c, true, function() { cerrar(); refrescarVista(); }); });
 
     var btnGRMA = q('#pvGestionarRMA');
     if (btnGRMA) btnGRMA.addEventListener('click', async () => {
@@ -22724,7 +23149,17 @@ function _configMaestros(box) {
         '<div class="page-subtitle">El contador de Servicio Técnico se congela cuando el caso llega a cualquiera de estos estados.</div>' +
         '<div id="lista_sla" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;"></div>' +
         '<div class="toolbar" style="margin-top:8px;"><button class="btn-secondary btn-sm" id="slaEditar">⚙️ Seleccionar estados</button></div>' +
+    '<div class="section"><h2>🧭 Flujo del caso: etapas y áreas de derivación</h2>' +
+        '<div class="page-subtitle">Nombre, color y activación de etapas, transiciones permitidas, áreas de derivación y exigencia de diagnóstico antes de pasar a Gestión Post Venta.</div>' +
+        '<div class="toolbar" style="margin-top:8px;"><button class="btn-secondary btn-sm" id="flujoEditar">⚙️ Editar flujo</button><button class="btn-outline btn-sm" id="flujoReset">Restaurar valores de fábrica</button></div></div>' +
     '</div><div id="cfgModal"></div>';
+
+    box.querySelector('#flujoEditar').addEventListener('click', function() { _editorFlujo(box.querySelector('#cfgModal')); });
+    box.querySelector('#flujoReset').addEventListener('click', async function() {
+        if (!confirm('¿Restaurar el flujo original de Post Venta?')) return;
+        await __X.restaurarFlujoPV();
+        toast('Flujo restaurado', 'success');
+    });
 
     var pintarSLA = function() {
         var act = __X.estadosDetienenSLA();
@@ -22781,6 +23216,91 @@ function _configMaestros(box) {
         agregarAMaestro(k, inp.value);
         inp.value = ''; pintarLista(k); toast('Valor agregado', 'success');
     }));
+}
+
+function _editorFlujo(host) {
+    var f = __X.flujoPV();
+    var cfg = JSON.parse(JSON.stringify(f.cfg));
+    cfg.estados = cfg.estados || {};
+    cfg.extras = cfg.extras || [];
+    cfg.transiciones = cfg.transiciones || {};
+    var areas = JSON.parse(JSON.stringify(f.areas));
+    var orig = JSON.parse(JSON.stringify(f.cfg));
+    var salir = function() { __X.aplicarFlujoPV(orig); host.innerHTML = ''; };
+    var ids = function() { return Object.keys(ESTADOS_PV).sort(function(a, b) { return (ESTADOS_PV[a].orden || 0) - (ESTADOS_PV[b].orden || 0); }); };
+    var nucleo = __X.ESTADOS_NUCLEO_PV;
+    var pintar = function() {
+        var lista = ids();
+        host.innerHTML = __X.fichaOperativa({
+            idCerrar: 'flX',
+            titulo: '🧭 Flujo de Post Venta',
+            cuerpo:
+                '<label style="display:flex;gap:8px;align-items:center;margin-bottom:10px;"><input type="checkbox" id="flDiag"' + (cfg.exigirDiagnostico !== false ? ' checked' : '') + '> Exigir diagnóstico técnico para pasar de Servicio Técnico a Gestión Post Venta</label>' +
+                '<h4>Etapas</h4><div class="table-wrap"><table><thead><tr><th>Etapa</th><th>Color</th><th>Activa</th><th>Puede pasar a</th></tr></thead><tbody>' +
+                lista.map(function(k) {
+                    var e = ESTADOS_PV[k];
+                    var dest = ESTADOS_PV[k] && (cfg.transiciones[k] || f.transiciones[k] || []);
+                    return '<tr><td><input class="flLab" data-k="' + escAttr(k) + '" value="' + escAttr(e.label) + '"></td>' +
+                        '<td><input type="color" class="flCol" data-k="' + escAttr(k) + '" value="' + escAttr(/^#[0-9a-fA-F]{6}$/.test(e.color) ? e.color : '#64748b') + '"></td>' +
+                        '<td><input type="checkbox" class="flAct" data-k="' + escAttr(k) + '"' + (e.activo === false ? '' : ' checked') + (nucleo.indexOf(k) !== -1 ? ' disabled' : '') + '></td>' +
+                        '<td style="font-size:11px;">' + lista.filter(function(d) { return d !== k; }).map(function(d) {
+                            return '<label style="display:inline-flex;gap:3px;margin-right:8px;white-space:nowrap;"><input type="checkbox" class="flTr" data-k="' + escAttr(k) + '" value="' + escAttr(d) + '"' + (dest.indexOf(d) !== -1 ? ' checked' : '') + '>' + escH(ESTADOS_PV[d].label) + '</label>';
+                        }).join('') + '</td></tr>';
+                }).join('') + '</tbody></table></div>' +
+                '<div class="toolbar"><input id="flNuevo" placeholder="Nueva etapa…" style="max-width:240px;"><button class="btn-success btn-sm" id="flAdd">➕ Agregar etapa</button></div>' +
+                '<h4 style="margin-top:14px;">Áreas de derivación</h4><div class="table-wrap"><table><thead><tr><th>Nombre</th><th>Etapa asociada</th><th>Permiso para recibir</th><th></th></tr></thead><tbody>' +
+                areas.map(function(a, i) {
+                    return '<tr><td><input class="arNom" data-i="' + i + '" value="' + escAttr(a.nombre) + '"></td>' +
+                        '<td><select class="arEst" data-i="' + i + '"><option value="">(sin cambio de etapa)</option>' + lista.map(function(k) { return '<option value="' + escAttr(k) + '"' + (a.estado === k ? ' selected' : '') + '>' + escH(ESTADOS_PV[k].label) + '</option>'; }).join('') + '</select></td>' +
+                        '<td><input class="arPer" data-i="' + i + '" value="' + escAttr(a.permiso || '') + '"></td>' +
+                        '<td><button class="btn-icon arDel" data-i="' + i + '" style="color:#b91c1c;">✕</button></td></tr>';
+                }).join('') + '</tbody></table></div>' +
+                '<div class="toolbar"><input id="arNuevo" placeholder="Nueva área…" style="max-width:240px;"><button class="btn-success btn-sm" id="arAdd">➕ Agregar área</button></div>',
+            pie: '<button class="btn-success btn-sm" id="flGuardar">Guardar flujo</button><button class="btn-outline btn-sm" id="flCancelar">Cancelar</button>'
+        });
+        var leer = function() {
+            cfg.exigirDiagnostico = host.querySelector('#flDiag').checked;
+            host.querySelectorAll('.flLab').forEach(function(i) { var k = i.dataset.k; cfg.estados[k] = cfg.estados[k] || {}; cfg.estados[k].label = i.value.trim(); });
+            host.querySelectorAll('.flCol').forEach(function(i) { cfg.estados[i.dataset.k].color = i.value; });
+            host.querySelectorAll('.flAct').forEach(function(i) { if (!i.disabled) cfg.estados[i.dataset.k].activo = i.checked; });
+            var tr = {};
+            host.querySelectorAll('.flTr').forEach(function(i) { tr[i.dataset.k] = tr[i.dataset.k] || []; if (i.checked) tr[i.dataset.k].push(i.value); });
+            cfg.transiciones = tr;
+            host.querySelectorAll('.arNom').forEach(function(i) { areas[+i.dataset.i].nombre = i.value.trim(); });
+            host.querySelectorAll('.arEst').forEach(function(i) { areas[+i.dataset.i].estado = i.value; });
+            host.querySelectorAll('.arPer').forEach(function(i) { areas[+i.dataset.i].permiso = i.value.trim(); });
+        };
+        host.querySelector('#flX').addEventListener('click', salir);
+        host.querySelector('#flCancelar').addEventListener('click', salir);
+        host.querySelector('#flAdd').addEventListener('click', function() {
+            leer();
+            var n = host.querySelector('#flNuevo').value.trim();
+            if (!n) return;
+            var id = 'x_' + n.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+            if (ESTADOS_PV[id]) { toast('Ya existe una etapa con ese nombre', 'error'); return; }
+            cfg.extras.push({ id: id, label: n, color: '#64748b' });
+            ESTADOS_PV[id] = { label: n, color: '#64748b', orden: 50, custom: true };
+            cfg.estados[id] = { label: n, color: '#64748b' };
+            pintar();
+        });
+        host.querySelector('#arAdd').addEventListener('click', function() {
+            leer();
+            var n = host.querySelector('#arNuevo').value.trim();
+            if (!n) return;
+            areas.push({ id: 'a_' + Date.now().toString(36), nombre: n, estado: '', permiso: 'postventa:ver' });
+            pintar();
+        });
+        host.querySelectorAll('.arDel').forEach(function(b) { b.addEventListener('click', function() { leer(); if (areas.length <= 1) { toast('Debe existir al menos un área', 'error'); return; } areas.splice(+b.dataset.i, 1); pintar(); }); });
+        host.querySelector('#flGuardar').addEventListener('click', async function() {
+            leer();
+            cfg.areas = areas.filter(function(a) { return a.nombre; });
+            var r = await __X.guardarFlujoPV(cfg);
+            if (r && r.ok === false) toast('Guardado localmente; la nube respondió: ' + (r.error || ''), 'warn');
+            else toast('Flujo guardado', 'success');
+            host.innerHTML = '';
+        });
+    };
+    pintar();
 }
 
 function _fichaProveedores(box) {
