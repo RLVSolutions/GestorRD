@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Gestor RD Musico · v20261104-0230</title>
+<title>Gestor RD Musico · v20261104-1435</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -3616,7 +3616,7 @@ const AREAS_PV_DEFECTO = [
     { id: 'tienda', nombre: 'Tienda · entrega al cliente', estado: 'retornado_tienda', permiso: 'postventa:crear' }
 ];
 const KEY_FLUJO = 'pv_flujo';
-let _flujoCfg = { estados: {}, extras: [], transiciones: {}, areas: null, exigirDiagnostico: true };
+let _flujoCfg = { estados: {}, extras: [], transiciones: {}, areas: null, exigirDiagnostico: true, ingresoAutomatico: true };
 
 function _copiaFlujo(o) { return JSON.parse(JSON.stringify(o)); }
 
@@ -3627,7 +3627,8 @@ function aplicarFlujoPV(cfg) {
         extras: Array.isArray(c.extras) ? _copiaFlujo(c.extras) : [],
         transiciones: c.transiciones && typeof c.transiciones === 'object' ? _copiaFlujo(c.transiciones) : {},
         areas: Array.isArray(c.areas) && c.areas.length ? _copiaFlujo(c.areas) : null,
-        exigirDiagnostico: c.exigirDiagnostico !== false
+        exigirDiagnostico: c.exigirDiagnostico !== false,
+        ingresoAutomatico: c.ingresoAutomatico !== false
     };
     Object.keys(ESTADOS_PV).forEach(function (k) { delete ESTADOS_PV[k]; });
     Object.keys(TRANSICIONES_PV).forEach(function (k) { delete TRANSICIONES_PV[k]; });
@@ -3665,6 +3666,7 @@ function areasPV() {
 }
 
 function exigirDiagnosticoPV() { return _flujoCfg.exigirDiagnostico !== false; }
+function ingresoAutomaticoPV() { return _flujoCfg.ingresoAutomatico !== false; }
 
 let _flujoTs = 0;
 async function cargarFlujoPV() {
@@ -3839,7 +3841,7 @@ async function crearCaso(datos, usuario) {
     const caso = {
         id: nuevoId('pv-'),
         numero,
-        estado: 'recepcionado',
+        estado: ingresoAutomaticoPV() ? 'en_sstt' : 'recepcionado',
         fechaCreacion: ahora,
         sucursal: datos.sucursal || '',
         responsable: usuario || datos.responsable || '',
@@ -3860,8 +3862,8 @@ async function crearCaso(datos, usuario) {
         sku: datos.sku || '', serie: datos.serie || '',
         proveedor: datos.proveedor || '',
         mesesGarantia: Number(datos.mesesGarantia) || 6,
-        clasificacion: '', respSSTT: '', fechaSSTT: '', diagnostico: '', fechaDiagnostico: '',
-        asignadoA: '', areaActual: 'ingreso',
+        clasificacion: '', respSSTT: '', fechaSSTT: ingresoAutomaticoPV() ? ahora : '', diagnostico: '', fechaDiagnostico: '',
+        asignadoA: '', areaActual: ingresoAutomaticoPV() ? 'servicio_tecnico' : 'ingreso', resultadoSSTT: '', fechaGestionSSTT: '',
         obsAdmin: '', facturaProveedor: '', fechaResolucion: '',
         rma: {
             proveedorId: '', facturaCompra: '', fechaCompra: '', ordenCompra: '',
@@ -3876,6 +3878,7 @@ async function crearCaso(datos, usuario) {
         historial: [{ fecha: ahora, evento: 'Caso creado', usuario: usuario || 'Sistema', detalle: datos.tipoSolicitud || '' }]
     };
 
+    if (caso.estado === 'en_sstt') registrarHistorial(caso, 'Recepcionado → En Servicio Técnico (automático)', usuario || 'Sistema', 'Asignado al área de Servicio Técnico');
     const g = validarGarantia(caso.fechaVenta, caso.mesesGarantia);
     caso.garantiaVigente = g.vigente;
     caso.garantiaDetalle = g.motivo;
@@ -3954,7 +3957,9 @@ async function transitarCaso(id, nuevoEstado, usuario, detalle, opciones = {}) {
             await llamar('apiFusionarRegistroSensible', 'postventa_casos', c.id, _serializarCaso({
                 fechaSSTT: c.fechaSSTT, fechaStockRMA: c.fechaStockRMA, fechaDevolucionVenta: c.fechaDevolucionVenta,
                 fechaEntregaCliente: c.fechaEntregaCliente, fechaResolucion: c.fechaResolucion, historial: c.historial,
-                areaActual: c.areaActual || ''
+                areaActual: c.areaActual || '', asignadoA: c.asignadoA || '', respSSTT: c.respSSTT || '',
+                diagnostico: c.diagnostico || '', fechaDiagnostico: c.fechaDiagnostico || '',
+                resultadoSSTT: c.resultadoSSTT || '', fechaGestionSSTT: c.fechaGestionSSTT || ''
             }), c.actualizado, usuario);
             if (!huboFalloRed) c._pendienteSync = false;
         } catch(e) { huboFalloRed = true; }
@@ -3965,6 +3970,31 @@ async function transitarCaso(id, nuevoEstado, usuario, detalle, opciones = {}) {
     _guardar();
     if (typeof __X.packingSincronizarCaso === 'function') { Promise.resolve(__X.packingSincronizarCaso(c)).catch(function () {}); }
     return { ok: true, caso: c, forzado };
+}
+
+async function cerrarGestionTecnica(id, datos, usuario) {
+    const c = obtenerCaso(id);
+    if (!c) return { ok: false, error: 'Caso no encontrado' };
+    const d = datos || {};
+    const resultado = d.resultado === 'resuelto' ? 'resuelto' : (d.resultado === 'rechazo' ? 'rechazo' : 'rma');
+    if (['recepcionado', 'en_sstt'].indexOf(c.estado) === -1) return { ok: false, error: 'El caso ya no está en Servicio Técnico' };
+    const diag = String(d.diagnostico !== undefined ? d.diagnostico : c.diagnostico || '').trim();
+    if (!diag && (resultado === 'rma' || exigirDiagnosticoPV())) return { ok: false, error: 'Registre el diagnóstico técnico antes de cerrar la gestión' };
+    if (c.estado === 'recepcionado') {
+        const r0 = await transitarCaso(c.id, 'en_sstt', usuario, 'Ingreso a Servicio Técnico');
+        if (!r0.ok) return r0;
+    }
+    const cambios = { diagnostico: diag, resultadoSSTT: resultado, fechaGestionSSTT: new Date().toISOString() };
+    if (d.clasificacion) cambios.clasificacion = d.clasificacion;
+    if (d.responsable) cambios.respSSTT = d.responsable;
+    else if (!c.respSSTT && usuario) cambios.respSSTT = usuario;
+    const r1 = await actualizarCaso(c.id, cambios, usuario, 'Gestión técnica cerrada', resultado === 'rma' ? 'Requiere gestión RMA' : (resultado === 'resuelto' ? 'Resuelto en Servicio Técnico' : 'Garantía no procede'));
+    if (!r1.ok) return r1;
+    const destino = resultado === 'rma' ? 'en_stock_rma' : (resultado === 'resuelto' ? 'reparado' : 'rechazado');
+    const r2 = await transitarCaso(c.id, destino, usuario, d.detalle || '');
+    if (!r2.ok) return r2;
+    if (resultado === 'rma') await actualizarCaso(c.id, { asignadoA: '', areaActual: 'gestion_postventa' }, usuario, 'Derivado a Gestión Post Venta', '');
+    return { ok: true, destino: destino, caso: obtenerCaso(c.id) };
 }
 
 function _autorizadoDerivar() {
@@ -4002,6 +4032,88 @@ async function derivarCaso(id, opciones, usuario) {
     if (area.id === 'servicio_tecnico' && destinatario) cambios.respSSTT = destinatario;
     const r2 = await actualizarCaso(c.id, cambios, usuario, 'Derivado a ' + area.nombre + (destinatario ? ' · ' + destinatario : ''), motivo);
     return Object.assign({ movido: mover }, r2);
+}
+
+async function _vinculosPacking(casoId) {
+    if (typeof __X.packingVinculosCaso !== 'function') return [];
+    try { return await __X.packingVinculosCaso(casoId); } catch (e) { return []; }
+}
+
+function _diasDesde(f) {
+    if (!f) return 0;
+    const t = new Date(f).getTime();
+    return isNaN(t) ? 0 : Math.max(0, Math.floor((Date.now() - t) / 86400000));
+}
+
+function _fechaUltimaEtapa(c) {
+    const h = (c.historial || []).filter(function (x) { return /→/.test(x.evento || ''); });
+    return h.length ? h[h.length - 1].fecha : c.fechaCreacion;
+}
+
+async function trazabilidadCaso(id) {
+    const c = obtenerCaso(id);
+    if (!c) return null;
+    const vinc = await _vinculosPacking(c.id);
+    const eventos = (c.historial || []).map(function (h) {
+        return { fecha: h.fecha, origen: 'Post Venta', evento: h.evento, usuario: h.usuario, detalle: h.detalle || '' };
+    });
+    vinc.forEach(function (v) {
+        (v.eventos || []).forEach(function (e) { eventos.push({ fecha: e.fecha, origen: 'Packing', evento: e.evento, usuario: e.usuario || '', detalle: e.detalle || '' }); });
+    });
+    const r = c.rma || {};
+    if (r.fechaCompra) eventos.push({ fecha: r.fechaCompra, origen: 'RMA', evento: 'Compra / garantía de proveedor registrada', usuario: '', detalle: r.facturaCompra || '' });
+    if (r.fechaEnvio) eventos.push({ fecha: r.fechaEnvio, origen: 'RMA', evento: 'Enviado a proveedor', usuario: '', detalle: [r.transportista, r.guiaDespacho].filter(Boolean).join(' · ') });
+    if (r.fechaRetorno) eventos.push({ fecha: r.fechaRetorno, origen: 'RMA', evento: 'Retorno de proveedor', usuario: '', detalle: r.resultadoProveedor || '' });
+    eventos.sort(function (a, b) { return String(a.fecha || '').localeCompare(String(b.fecha || '')); });
+    const alertas = [];
+    const est = c.estado;
+    const posGestion = ['en_stock_rma', 'en_rma', 'pendiente_proveedor', 'retornado_proveedor'].indexOf(est) !== -1;
+    if ((posGestion || est === 'reparado') && !String(c.diagnostico || '').trim()) alertas.push('El caso avanzó sin diagnóstico técnico registrado');
+    if (['en_sstt', 'recepcionado'].indexOf(est) !== -1 && !c.respSSTT && !c.asignadoA && _diasDesde(c.fechaCreacion) >= 2) alertas.push('Lleva ' + _diasDesde(c.fechaCreacion) + ' días en Servicio Técnico sin responsable');
+    const s = slaCaso(c);
+    if (s && s.aplica && s.excedido) alertas.push('SLA de Servicio Técnico excedido (' + s.horas + 'h de ' + s.limite + 'h)');
+    const pend = vinc.filter(function (v) { return v.estadoLogistico !== 'Despachado' && v.estadoLogistico !== 'Anulado'; });
+    if (est === 'cerrado' && pend.length) alertas.push('Caso cerrado con documento pendiente en Packing');
+    if (r.fechaEnvio && !vinc.length) alertas.push('Tiene fecha de envío al proveedor pero no existe documento en Packing');
+    if (r.fechaEnvio && pend.length && ['retornado_proveedor', 'devolucion_venta', 'entrega_cliente', 'reparado', 'retornado_tienda', 'resuelto_espera', 'cerrado'].indexOf(est) !== -1) alertas.push('El producto ya retornó pero el documento de envío sigue activo en Packing');
+    if (est === 'pendiente_proveedor' && !vinc.length) alertas.push('Enviado a proveedor sin solicitud de despacho en Packing');
+    if (est === 'pendiente_proveedor' && !r.numeroRMA) alertas.push('Enviado a proveedor sin número de RMA');
+    if (est === 'retornado_proveedor' && !r.fechaRetorno) alertas.push('Retornado sin fecha de retorno registrada');
+    if (est === 'en_stock_rma' && _diasDesde(_fechaUltimaEtapa(c)) >= 7) alertas.push('Lleva ' + _diasDesde(_fechaUltimaEtapa(c)) + ' días en Stock RMA sin decisión');
+    if (est === 'pendiente_proveedor' && r.fechaEnvio && _diasDesde(r.fechaEnvio) >= 30) alertas.push('Lleva ' + _diasDesde(r.fechaEnvio) + ' días con el proveedor');
+    const area = areasPV().find(function (a) { return a.id === c.areaActual; });
+    return {
+        caso: c,
+        viaje: viajeCaso(c),
+        area: area ? area.nombre : '',
+        asignado: c.asignadoA || c.respSSTT || '',
+        diasCaso: _diasDesde(c.fechaCreacion),
+        diasEtapa: _diasDesde(_fechaUltimaEtapa(c)),
+        siguiente: accionSiguiente('postventa', c.estado),
+        sla: s,
+        packing: vinc,
+        eventos: eventos,
+        alertas: alertas
+    };
+}
+
+async function buscarTrazabilidad(texto) {
+    const q = String(texto || '').trim().toLowerCase();
+    if (!q) return [];
+    const base = casosTodos();
+    const norm = function (v) { return String(v == null ? '' : v).toLowerCase(); };
+    const out = [];
+    for (const c of base) {
+        const r = c.rma || {};
+        const campos = [c.numero, c.sku, c.serie, c.cliente, c.rut, c.numeroDoc, c.marca, c.modelo, c.descripcion, r.numeroRMA, r.guiaDespacho, r.ordenCompra, r.facturaCompra, c.proveedor];
+        let hit = campos.some(function (v) { return norm(v).indexOf(q) !== -1; });
+        if (!hit && typeof __X.packingBuscarCasos === 'function') {
+            try { const ids = await __X.packingBuscarCasos(q); hit = ids.indexOf(c.id) !== -1; } catch (e) {}
+        }
+        if (hit) out.push(c);
+    }
+    out.sort(function (a, b) { return String(b.fechaCreacion || '').localeCompare(String(a.fechaCreacion || '')); });
+    return out.slice(0, 60);
 }
 
 function viajeCaso(c) {
@@ -4291,7 +4403,7 @@ registrarBuscadorUniversal('postventa', function (q) {
     });
 });
 
-__X.SLA_SSTT_HORAS = SLA_SSTT_HORAS; __X.ESTADOS_PV = ESTADOS_PV; __X.TRANSICIONES_PV = TRANSICIONES_PV; __X.ACCIONES_PV = ACCIONES_PV; __X.TIPOS_SOLICITUD = TIPOS_SOLICITUD; __X.CLASIFICACIONES = CLASIFICACIONES; __X.cargarCasos = cargarCasos; __X.casos = casos; __X.casosTodos = casosTodos; __X.derivarCaso = derivarCaso; __X.viajeCaso = viajeCaso; __X.flujoPV = flujoPV; __X.areasPV = areasPV; __X.cargarFlujoPV = cargarFlujoPV; __X.guardarFlujoPV = guardarFlujoPV; __X.restaurarFlujoPV = restaurarFlujoPV; __X.aplicarFlujoPV = aplicarFlujoPV; __X.exigirDiagnosticoPV = exigirDiagnosticoPV; __X.ESTADOS_NUCLEO_PV = ESTADOS_NUCLEO_PV; __X.validarGarantia = validarGarantia; __X.slaCaso = slaCaso; __X.crearCaso = crearCaso; __X.obtenerCaso = obtenerCaso; __X.casosDeCliente = casosDeCliente; __X.transitarCaso = transitarCaso; __X.actualizarCaso = actualizarCaso; __X.registrarHistorial = registrarHistorial; __X.eliminarCaso = eliminarCaso; __X.indicadoresPV = indicadoresPV; __X.validarGarantiaProveedor = validarGarantiaProveedor; __X.registrarCompraRMA = registrarCompraRMA; __X.derivarAProveedor = derivarAProveedor; __X.registrarRetornoProveedor = registrarRetornoProveedor; __X.diasEnProveedor = diasEnProveedor; __X.agregarEvidencia = agregarEvidencia; __X.eliminarEvidencia = eliminarEvidencia; __X.fundamentoLegalRechazo = fundamentoLegalRechazo; __X.resolverRechazo = resolverRechazo;
+__X.SLA_SSTT_HORAS = SLA_SSTT_HORAS; __X.ESTADOS_PV = ESTADOS_PV; __X.TRANSICIONES_PV = TRANSICIONES_PV; __X.ACCIONES_PV = ACCIONES_PV; __X.TIPOS_SOLICITUD = TIPOS_SOLICITUD; __X.CLASIFICACIONES = CLASIFICACIONES; __X.cargarCasos = cargarCasos; __X.casos = casos; __X.casosTodos = casosTodos; __X.derivarCaso = derivarCaso; __X.cerrarGestionTecnica = cerrarGestionTecnica; __X.trazabilidadCaso = trazabilidadCaso; __X.buscarTrazabilidad = buscarTrazabilidad; __X.ingresoAutomaticoPV = ingresoAutomaticoPV; __X.viajeCaso = viajeCaso; __X.flujoPV = flujoPV; __X.areasPV = areasPV; __X.cargarFlujoPV = cargarFlujoPV; __X.guardarFlujoPV = guardarFlujoPV; __X.restaurarFlujoPV = restaurarFlujoPV; __X.aplicarFlujoPV = aplicarFlujoPV; __X.exigirDiagnosticoPV = exigirDiagnosticoPV; __X.ESTADOS_NUCLEO_PV = ESTADOS_NUCLEO_PV; __X.validarGarantia = validarGarantia; __X.slaCaso = slaCaso; __X.crearCaso = crearCaso; __X.obtenerCaso = obtenerCaso; __X.casosDeCliente = casosDeCliente; __X.transitarCaso = transitarCaso; __X.actualizarCaso = actualizarCaso; __X.registrarHistorial = registrarHistorial; __X.eliminarCaso = eliminarCaso; __X.indicadoresPV = indicadoresPV; __X.validarGarantiaProveedor = validarGarantiaProveedor; __X.registrarCompraRMA = registrarCompraRMA; __X.derivarAProveedor = derivarAProveedor; __X.registrarRetornoProveedor = registrarRetornoProveedor; __X.diasEnProveedor = diasEnProveedor; __X.agregarEvidencia = agregarEvidencia; __X.eliminarEvidencia = eliminarEvidencia; __X.fundamentoLegalRechazo = fundamentoLegalRechazo; __X.resolverRechazo = resolverRechazo;
 __X.registrarMotorAccion = registrarMotorAccion; __X.accionSiguiente = accionSiguiente; __X.registrarBuscadorUniversal = registrarBuscadorUniversal; __X.buscarUniversal = buscarUniversal;
 })();
 
@@ -12896,6 +13008,44 @@ async function packingSincronizarCaso(caso) {
     return n;
 }
 
+async function packingVinculosCaso(casoId) {
+    await _cargarEstadoPacking();
+    const out = [];
+    _ordenes.forEach(function (ot) {
+        (ot.mandantes || []).forEach(function (m, i) {
+            if (!m || !(m.casoId === casoId || (m.canal === 'RMA' && String(m.pedidoId || '') === String(casoId)))) return;
+            const bultos = _bultosDeIdx(i, ot).map(function (b) { return { id: b.id, numero: b.numero, estado: b.estado || 'pendiente', despachado: b.despachado || '' }; });
+            const ev = [];
+            const f0 = m.fechaEmision || (bultos.length ? '' : '');
+            if (f0) ev.push({ fecha: f0, evento: 'Documento agregado a OT ' + (ot.orden || ot.id), detalle: (m.documento || '') + ' ' + (m.numeroDoc || '') });
+            if (m.estadoLogistico === 'Despachado') ev.push({ fecha: m.fechaEnvio || ot.actualizado || '', evento: 'Despachado en OT ' + (ot.orden || ot.id), detalle: m.indicador || '' });
+            if (m.estadoLogistico === 'Anulado') ev.push({ fecha: m.actualizado || ot.actualizado || '', evento: 'Documento anulado en OT ' + (ot.orden || ot.id), detalle: m.motivoAnulacion || '' });
+            out.push({
+                otId: ot.id, orden: ot.orden || '', estadoOT: estadoOTPacking(ot), mandanteId: m.id,
+                documento: ((m.documento || '') + ' ' + (m.numeroDoc || '')).trim(),
+                estadoLogistico: m.estadoLogistico || 'Pendiente', fechaEnvio: m.fechaEnvio || '', indicador: m.indicador || '',
+                bultos: bultos, eventos: ev
+            });
+        });
+    });
+    return out;
+}
+
+async function packingBuscarCasos(texto) {
+    await _cargarEstadoPacking();
+    const q = String(texto || '').toLowerCase();
+    const ids = [];
+    _ordenes.forEach(function (ot) {
+        const otHit = String(ot.orden || '').toLowerCase().indexOf(q) !== -1 || String(ot.id || '').toLowerCase() === q;
+        (ot.mandantes || []).forEach(function (m) {
+            if (!m || !m.casoId) return;
+            const hit = otHit || [m.numeroDoc, m.ordenVoucher].some(function (v) { return String(v || '').toLowerCase().indexOf(q) !== -1; });
+            if (hit && ids.indexOf(m.casoId) === -1) ids.push(m.casoId);
+        });
+    });
+    return ids;
+}
+
 async function reconciliarPackingPV() {
     if (!__X.cargarCasos) return 0;
     await __X.cargarCasos();
@@ -13161,6 +13311,8 @@ __X.agregarDesdeExterno     = agregarDesdeExterno;
 __X.agregarFilaDesdeExterno = agregarFilaDesdeExterno;
 __X.crearSolicitudPackingRMA = crearSolicitudPackingRMA;
 __X.packingSincronizarCaso = packingSincronizarCaso;
+__X.packingVinculosCaso = packingVinculosCaso;
+__X.packingBuscarCasos = packingBuscarCasos;
 __X.reconciliarPackingPV = reconciliarPackingPV;
 __X.reporteTransporte = _generarReporteTransporte;
 __X.bultosDePedido = function (p) {
@@ -21521,6 +21673,7 @@ const SUBVISTAS = [
     { id: 'dashboard', nombre: 'Panel', permiso: 'postventa:ver' },
     { id: 'casos', nombre: 'Casos', permiso: 'postventa:ver' },
     { id: 'nuevo', nombre: 'Nuevo Caso', permiso: 'postventa:crear' },
+    { id: 'trazabilidad', nombre: '🧭 Trazabilidad', permiso: 'postventa:ver' },
     { id: 'sstt', nombre: 'Servicio Técnico', permiso: 'postventa:sstt' },
     { id: 'rma', nombre: 'RMA', permiso: 'postventa:admin' },
     { id: 'proveedores', nombre: 'Proveedores', permiso: 'postventa:proveedor' },
@@ -21533,6 +21686,7 @@ let _box = null;
 let _pag = null;
 let _colf = crearEstadoFiltros();
 let _abrirAlEntrar = null;
+let _trazaInicial = '';
 function irAGestionarCaso(casoId) {
     _abrirAlEntrar = casoId;
     _sub = 'casos';
@@ -21576,6 +21730,7 @@ async function renderPostVenta(cont) {
 
     if (_sub === 'dashboard') _panel(box);
     else if (_sub === 'nuevo') _formNuevo(box);
+    else if (_sub === 'trazabilidad') _trazabilidad(box);
     else if (_sub === 'sstt') _lista(box, 'sstt');
     else if (_sub === 'rma') _lista(box, 'rma');
     else if (_sub === 'proveedores') _fichaProveedores(box);
@@ -22019,6 +22174,73 @@ function _reponerStock(c, cant) {
     patchProducto(cod, { stock: (Number(p.stock) || 0) + (Number(cant) || 1) });
 }
 
+function _enGestionTecnica(c) {
+    return c.estado === 'en_sstt' || c.estado === 'recepcionado';
+}
+
+async function _trazabilidad(box) {
+    var ini = _trazaInicial;
+    _trazaInicial = '';
+    box.innerHTML =
+    '<div class="page-title"><div><h1>🧭 Trazabilidad</h1><div class="page-subtitle">Consulta el estado de un caso o producto: N° de caso, SKU, serie, cliente, RUT, documento, RMA, guía u OT de Packing</div></div></div>' +
+    '<div class="section"><div class="toolbar"><input id="trQ" placeholder="Buscar…" style="max-width:360px;"><button class="btn-primary btn-sm" id="trGo">Buscar</button></div>' +
+    '<div id="trRes"></div></div><div id="trFicha"></div>';
+    var qi = box.querySelector('#trQ');
+    var pintarFicha = async function(id) {
+        var f = box.querySelector('#trFicha');
+        f.innerHTML = '<div class="page-subtitle">Cargando…</div>';
+        var t = await __X.trazabilidadCaso(id);
+        if (!t) { f.innerHTML = ''; return; }
+        var c = t.caso;
+        var e = ESTADOS_PV[c.estado] || { label: c.estado, color: '#94a3b8' };
+        var sla = t.sla && t.sla.aplica ? t.sla.horas + 'h / ' + t.sla.limite + 'h' + (t.sla.detenido ? ' (detenido)' : '') : 'No aplica';
+        f.innerHTML = '<div class="section">' +
+            '<h2>' + escH(c.numero) + ' · <span class="badge" style="background:' + e.color + ';color:#fff;">' + escH(e.label) + '</span></h2>' +
+            '<div class="page-subtitle">' + escH([c.descripcion || [c.marca, c.modelo].filter(Boolean).join(' '), c.sku && 'SKU ' + c.sku, c.serie && 'Serie ' + c.serie].filter(Boolean).join(' · ')) + ' — ' + escH(c.cliente || '') + ' ' + escH(c.rut || '') + '</div>' +
+            '<div class="kpi-grid" style="margin:10px 0;">' +
+                '<div class="kpi"><div class="kpi-label">Área actual</div><div class="kpi-value" style="font-size:.9rem;">' + escH(t.area || '—') + '</div></div>' +
+                '<div class="kpi"><div class="kpi-label">Responsable</div><div class="kpi-value" style="font-size:.9rem;">' + escH(t.asignado || 'Sin asignar') + '</div></div>' +
+                '<div class="kpi"><div class="kpi-label">Días del caso</div><div class="kpi-value" style="font-size:.9rem;">' + t.diasCaso + '</div></div>' +
+                '<div class="kpi"><div class="kpi-label">Días en esta etapa</div><div class="kpi-value" style="font-size:.9rem;">' + t.diasEtapa + '</div></div>' +
+                '<div class="kpi"><div class="kpi-label">SLA técnico</div><div class="kpi-value" style="font-size:.9rem;">' + escH(sla) + '</div></div>' +
+                '<div class="kpi"><div class="kpi-label">Garantía</div><div class="kpi-value" style="font-size:.9rem;color:' + (c.garantiaVigente ? '#16a34a' : '#dc2626') + ';">' + (c.garantiaVigente ? 'Vigente' : 'Vencida') + '</div></div>' +
+            '</div>' +
+            _viajeHtml(c) +
+            '<div class="info"><b>Qué sigue:</b> ' + escH(t.siguiente || '—') + '</div>' +
+            (t.alertas.length ? '<div class="warn" style="margin-top:8px;"><b>Alertas de consistencia</b><ul style="margin:6px 0 0 18px;">' + t.alertas.map(function(a) { return '<li>' + escH(a) + '</li>'; }).join('') + '</ul></div>' : '<div class="page-subtitle" style="margin-top:8px;color:#16a34a;">✔ Sin inconsistencias detectadas</div>') +
+            '<h3 style="margin-top:14px;">Logística · Packing</h3>' +
+            (t.packing.length ? '<div class="table-wrap"><table><thead><tr><th>OT</th><th>Estado OT</th><th>Documento</th><th>Estado doc.</th><th>Envío</th><th>Bultos</th></tr></thead><tbody>' +
+                t.packing.map(function(v) { return '<tr><td>' + escH(v.orden || v.otId) + '</td><td>' + escH(v.estadoOT) + '</td><td>' + escH(v.documento) + '</td><td>' + escH(v.estadoLogistico) + '</td><td>' + escH(v.fechaEnvio || '—') + '</td><td>' + v.bultos.map(function(b) { return '#' + escH(String(b.numero)) + ' ' + escH(b.estado); }).join(', ') + '</td></tr>'; }).join('') +
+                '</tbody></table></div>' : '<div class="page-subtitle">Sin documentos de despacho asociados.</div>') +
+            '<h3 style="margin-top:14px;">Línea de tiempo</h3>' +
+            '<div class="table-wrap" style="max-height:340px;overflow:auto;"><table><thead><tr><th>Fecha</th><th>Origen</th><th>Evento</th><th>Usuario</th><th>Detalle</th></tr></thead><tbody>' +
+                t.eventos.map(function(x) { return '<tr><td style="white-space:nowrap;">' + escH(String(x.fecha || '').slice(0, 16).replace('T', ' ')) + '</td><td>' + escH(x.origen) + '</td><td><b>' + escH(x.evento) + '</b></td><td>' + escH(x.usuario) + '</td><td class="page-subtitle">' + escH(x.detalle) + '</td></tr>'; }).join('') +
+            '</tbody></table></div>' +
+            '<div class="toolbar" style="margin-top:10px;"><button class="btn-primary btn-sm" id="trAbrir">Abrir caso</button></div></div>';
+        f.querySelector('#trAbrir').addEventListener('click', function() { _detalle(c.id); });
+    };
+    var buscar = async function() {
+        var q = qi.value.trim();
+        var res = box.querySelector('#trRes');
+        if (!q) { res.innerHTML = ''; return; }
+        var lista = await __X.buscarTrazabilidad(q);
+        res.innerHTML = lista.length ? '<div class="table-wrap"><table><thead><tr><th>Caso</th><th>Producto</th><th>Serie</th><th>Cliente</th><th>Estado</th><th>Área</th></tr></thead><tbody>' +
+            lista.map(function(c) {
+                var e = ESTADOS_PV[c.estado] || { label: c.estado, color: '#94a3b8' };
+                return '<tr style="cursor:pointer;" data-t="' + escAttr(c.id) + '"><td><b>' + escH(c.numero) + '</b></td><td>' + escH(c.descripcion || [c.marca, c.modelo].filter(Boolean).join(' ') || c.sku || '—') + '</td><td>' + escH(c.serie || '—') + '</td><td>' + escH(c.cliente || '—') + '</td>' +
+                    '<td><span class="badge" style="background:' + e.color + ';color:#fff;">' + escH(e.label) + '</span></td><td>' + escH((__X.areasPV().find(function(a) { return a.id === c.areaActual; }) || {}).nombre || '—') + '</td></tr>';
+            }).join('') + '</tbody></table></div>' : '<div class="page-subtitle">Sin resultados.</div>';
+        res.querySelectorAll('[data-t]').forEach(function(tr) { tr.addEventListener('click', function() { pintarFicha(tr.dataset.t); }); });
+        if (lista.length === 1) pintarFicha(lista[0].id);
+    };
+    box.querySelector('#trGo').addEventListener('click', buscar);
+    qi.addEventListener('keydown', function(ev) { if (ev.key === 'Enter') buscar(); });
+    if (ini) {
+        var c0 = obtenerCaso(ini);
+        if (c0) { qi.value = c0.numero; await buscar(); pintarFicha(c0.id); }
+    }
+}
+
 function _esAdmin(rol) {
     return tienePermiso(rol, 'postventa:admin') || tienePermiso(rol, 'postventa:control_total');
 }
@@ -22246,9 +22468,11 @@ function _lista(box, modo) {
                     '<td>' + escH(c.tipoSolicitud || '—') + '</td>' +
                     '<td><span class="badge ' + (c.garantiaVigente ? 'badge-green' : 'badge-red') + '">' + (c.garantiaVigente ? 'Vigente' : 'Vencida') + '</span></td>' +
                     '<td style="text-align:center;">' + (s.aplica ? '<span class="badge ' + (s.excedido ? 'badge-red' : 'badge-green') + '" title="' + s.horas + 'h de ' + s.limite + 'h' + (s.detenido ? ' · SLA detenido' : '') + '">' + s.horas + 'h</span>' : '<span class="page-subtitle">—</span>') + '</td>' +
-                    '<td><span class="badge" style="background:' + e.color + ';color:#fff;">' + escH(e.label) + '</span></td>' +
+                    '<td><span class="badge" style="background:' + e.color + ';color:#fff;">' + escH(e.label) + '</span>' +
+                        '<br><small class="page-subtitle">' + escH(((__X.areasPV().find(function(a) { return a.id === c.areaActual; }) || {}).nombre || '')) + (c.asignadoA || c.respSSTT ? ' · ' + escH(c.asignadoA || c.respSSTT) : '') + '</small></td>' +
                     '<td style="text-align:center;white-space:nowrap;">' +
-                        '<button class="btn-icon btn-secondary" data-gestion="' + escAttr(c.id) + '" title="Gestionar caso: cambiar estado, comentar, derivar o devolver">⚙️</button>' +
+                        '<button class="btn-icon btn-outline" data-traza="' + escAttr(c.id) + '" title="Ver trazabilidad completa del caso">🧭</button>' +
+                        '<button class="btn-icon btn-secondary" data-gestion=""' + escAttr(c.id) + '" title="Gestionar caso: cambiar estado, comentar, derivar o devolver">⚙️</button>' +
                         '<button class="btn-icon btn-primary" data-ver="' + escAttr(c.id) + '" title="Ver y editar el caso">✏️</button>' +
                         (tienePermiso(rol, 'postventa:eliminar') ? '<button class="btn-icon btn-danger" data-del="' + escAttr(c.id) + '" title="Eliminar">🗑️</button>' : '') +
                     '</td></tr>';
@@ -22258,6 +22482,7 @@ function _lista(box, modo) {
         if (_pag) _pag.render(box.querySelector('#pvPag'), total, pintar);
         engancharIconos(box, GETTERS, () => items, _colf, () => { if (_pag) _pag.reset(); pintar(); });
         box.querySelectorAll('[data-ver]').forEach(b => b.addEventListener('click', () => _detalle(b.dataset.ver)));
+        box.querySelectorAll('[data-traza]').forEach(b => b.addEventListener('click', () => { _trazaInicial = b.dataset.traza; router.navegar('postventa', 'trazabilidad'); }));
         box.querySelectorAll('[data-gestion]').forEach(b => b.addEventListener('click', () => _modalGestionCaso(b.dataset.gestion, box, modo)));
         box.querySelectorAll('.pvChk').forEach(ch => ch.addEventListener('change', _refrescarSel));
         var mAll = box.querySelector('#pvAll');
@@ -22769,7 +22994,15 @@ function _detalle(id, ext) {
                 '<div><label>Responsable SSTT</label>' + _selectMaestro('tecnicos', 'pvResp', c.respSSTT) + '</div>' +
             '</div>' +
             '<div style="margin-top:8px;"><label>Diagnóstico</label>' +
-                '<textarea id="pvDiag" rows="3">' + escH(c.diagnostico || '') + '</textarea></div>' : '') +
+                '<textarea id="pvDiag" rows="3">' + escH(c.diagnostico || '') + '</textarea></div>' +
+            (_enGestionTecnica(c) ?
+                '<div style="margin-top:10px;padding:10px;border:1px solid #bfdbfe;background:#eff6ff;border-radius:8px;">' +
+                    '<b>Cerrar gestión técnica</b><div class="page-subtitle">Registra el diagnóstico, guarda y deriva el caso en un solo paso.</div>' +
+                    '<div class="toolbar" style="margin-top:8px;">' +
+                        '<button class="btn-success btn-sm" id="pvCierraRMA">➡ Requiere RMA · pasar a Gestión Post Venta</button>' +
+                        '<button class="btn-primary btn-sm" id="pvCierraOk">✔ Resuelto en Servicio Técnico</button>' +
+                    '</div><div id="pvCierraErr" style="color:#b91c1c;font-size:12px;"></div></div>' : '')
+            : '') +
 
             _panelRMA(c, puedeGestionar) +
 
@@ -22800,9 +23033,10 @@ function _detalle(id, ext) {
             '<button class="btn-success btn-sm" id="pvGuardarTodo">💾 Guardar cambios</button>' +
             '<span style="width:1px;height:26px;background:#e2e8f0;margin:0 6px;"></span>' +
             (siguientes.length ? '<span style="font-size:11px;font-weight:700;color:#64748b;align-self:center;">DECISIÓN →</span>' : '') +
+            '<button class="btn-outline btn-sm" id="pvTraza">🧭 Trazabilidad</button>' +
             (c.estado !== 'cerrado' && (tienePermiso(rol, 'postventa:admin') || tienePermiso(rol, 'postventa:sstt') || tienePermiso(rol, 'postventa:crear') || tienePermiso(rol, 'postventa:gestion_rma')) ? '<button class="btn-secondary btn-sm" id="pvDerivar">↪ Derivar</button>' : '') +
             (c.estado !== 'cerrado' && _esAdmin(rol) ? '<button class="btn-danger btn-sm" id="pvForzar">⚡ Forzar etapa</button>' : '') +
-            _siguientesPermitidos(c, rol).map(n => '<button class="btn-primary btn-sm" data-estado="' + n + '">→ ' + escH(ESTADOS_PV[n].label) + '</button>').join('') +
+            _siguientesPermitidos(c, rol).filter(function(n) { return !(_enGestionTecnica(c) && puedeGestionar && (n === 'en_stock_rma' || n === 'reparado')); }).map(n => '<button class="btn-primary btn-sm" data-estado="' + n + '">→ ' + escH(ESTADOS_PV[n].label) + '</button>').join('') +
             (c.estado === 'en_stock_rma' ? '<button class="btn-secondary btn-sm" id="pvGestionarRMA">📋 Gestionar RMA</button>' : '') +
             (c.estado === 'en_stock_rma' ? '<button class="btn-danger btn-sm" id="pvMerma">🗑️ Dar de baja (merma)</button>' : '') +
             (['en_rma','retornado_proveedor'].indexOf(c.estado) !== -1 ?
@@ -22930,6 +23164,27 @@ function _detalle(id, ext) {
             });
         });
     });
+
+    var btnTz = q('#pvTraza');
+    if (btnTz) btnTz.addEventListener('click', function() { _trazaInicial = c.id; cerrar(); router.navegar('postventa', 'trazabilidad'); });
+    var cierraGT = async function(resultado) {
+        var u = getUsuarioActual();
+        var nu = u ? u.nombre : 'Sistema';
+        var err = q('#pvCierraErr');
+        var r = await __X.cerrarGestionTecnica(c.id, {
+            resultado: resultado,
+            diagnostico: q('#pvDiag') ? q('#pvDiag').value : undefined,
+            clasificacion: q('#pvClasif') ? q('#pvClasif').value : '',
+            responsable: q('#pvResp') ? q('#pvResp').value : ''
+        }, nu);
+        if (!r || !r.ok) { if (err) err.textContent = (r && r.error) || 'No se pudo cerrar la gestión'; return; }
+        try { await _efectoDestino(obtenerCaso(c.id), r.destino, nu); } catch (e4) { toast('Gestión cerrada, pero falló el efecto: ' + ((e4 && e4.message) || e4), 'warn'); }
+        toast(resultado === 'rma' ? 'Caso derivado a Gestión Post Venta' : 'Caso resuelto en Servicio Técnico', 'success');
+        cerrar();
+        refrescarVista();
+    };
+    var bRma = q('#pvCierraRMA'); if (bRma) bRma.addEventListener('click', function() { cierraGT('rma'); });
+    var bOk = q('#pvCierraOk'); if (bOk) bOk.addEventListener('click', function() { cierraGT('resuelto'); });
 
     var btnDer = q('#pvDerivar');
     if (btnDer) btnDer.addEventListener('click', function() { _modalDerivar(c, false, function() { cerrar(); refrescarVista(); }); });
@@ -23134,6 +23389,12 @@ function _engancharMaestros(box) {
     });
 }
 
+__X.configPostVenta = async function(box) {
+    await cargarMaestrosPV();
+    await cargarCasos();
+    _configMaestros(box);
+};
+
 function _configMaestros(box) {
     box.innerHTML =
     '<div class="page-title"><div><h1>⚙️ Configuración de Post Venta</h1>' +
@@ -23235,6 +23496,7 @@ function _editorFlujo(host) {
             idCerrar: 'flX',
             titulo: '🧭 Flujo de Post Venta',
             cuerpo:
+                '<label style="display:flex;gap:8px;align-items:center;margin-bottom:6px;"><input type="checkbox" id="flIng"' + (cfg.ingresoAutomatico !== false ? ' checked' : '') + '> Los casos nuevos nacen asignados a Servicio Técnico (sin paso manual de recepción)</label>' +
                 '<label style="display:flex;gap:8px;align-items:center;margin-bottom:10px;"><input type="checkbox" id="flDiag"' + (cfg.exigirDiagnostico !== false ? ' checked' : '') + '> Exigir diagnóstico técnico para pasar de Servicio Técnico a Gestión Post Venta</label>' +
                 '<h4>Etapas</h4><div class="table-wrap"><table><thead><tr><th>Etapa</th><th>Color</th><th>Activa</th><th>Puede pasar a</th></tr></thead><tbody>' +
                 lista.map(function(k) {
@@ -23260,6 +23522,7 @@ function _editorFlujo(host) {
         });
         var leer = function() {
             cfg.exigirDiagnostico = host.querySelector('#flDiag').checked;
+            cfg.ingresoAutomatico = host.querySelector('#flIng').checked;
             host.querySelectorAll('.flLab').forEach(function(i) { var k = i.dataset.k; cfg.estados[k] = cfg.estados[k] || {}; cfg.estados[k].label = i.value.trim(); });
             host.querySelectorAll('.flCol').forEach(function(i) { cfg.estados[i.dataset.k].color = i.value; });
             host.querySelectorAll('.flAct').forEach(function(i) { if (!i.disabled) cfg.estados[i.dataset.k].activo = i.checked; });
@@ -27864,7 +28127,15 @@ async function _renderListas(box) {
                     </div>
                     <div id="lst_${k}" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
                 </div>`).join('')}
-        </div>`).join('')}`;
+        </div>`).join('')}
+    <div class="section" id="listasPostVenta"><h2>🛠️ Post Venta y RMA</h2><div id="listasPostVentaCuerpo"><div class="page-subtitle">Cargando…</div></div></div>`;
+
+    const cuerpoPV = box.querySelector('#listasPostVentaCuerpo');
+    if (typeof __X.configPostVenta === 'function') {
+        __X.configPostVenta(cuerpoPV).catch(() => { cuerpoPV.innerHTML = '<div class="warn">No se pudo cargar la configuración de Post Venta.</div>'; });
+    } else {
+        cuerpoPV.innerHTML = '<div class="warn">El módulo Post Venta no está disponible.</div>';
+    }
 
     const pintar = k => {
         const cont = box.querySelector('#lst_' + k);
@@ -27882,7 +28153,7 @@ async function _renderListas(box) {
     };
     Object.keys(_CATALOGO).forEach(pintar);
 
-    box.querySelectorAll('[data-add]').forEach(b => b.addEventListener('click', () => {
+    Array.prototype.filter.call(box.querySelectorAll('[data-add]'), b => !b.closest('#listasPostVenta')).forEach(b => b.addEventListener('click', () => {
         const k = b.dataset.add;
         const inp = box.querySelector('#add_' + k);
         const v = inp.value.trim();
