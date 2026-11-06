@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Gestor RD Musico · v20261104-1435</title>
+<title>Gestor RD Musico · v20261106-1646</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -1850,9 +1850,29 @@ function eliminarAreaDerivacion(id) {
     return guardarAreasDerivacion(areasDerivacion().filter(a => a.id !== id));
 }
 
+function motivoNoCobrable(doc) {
+    if (!doc) return 'Documento no válido';
+    const num = v => { const n = Number(v); return isFinite(n) ? n : 0; };
+    const saldo = doc.saldo != null && doc.saldo !== '' ? num(doc.saldo) : num(doc.monto) + num(doc.ajustePrecio) - num(doc.notaCredito) - num(doc.pagos);
+    const ref = (doc.factura || doc.numero || '') ? ' ' + (doc.factura || doc.numero) : '';
+    if (!(saldo > 0)) return 'El documento' + ref + ' está pagado (saldo cero) y no puede enviarse a Cobranza';
+    const m = String(doc.vencimiento || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) {
+        const venc = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 23, 59, 59);
+        if (new Date() <= venc) return 'El documento' + ref + ' aún no vence (vence el ' + m[3] + '-' + m[2] + '-' + m[1] + ') y no puede enviarse a Cobranza';
+    } else if (!(num(doc.diasAtraso) > 0)) {
+        return 'El documento' + ref + ' no tiene mora registrada y no puede enviarse a Cobranza';
+    }
+    return '';
+}
+
 function derivarDocumento(doc, destinoId, usuario, nota, esDevolucion) {
     if (!doc) return { ok: false, error: 'Documento no válido' };
     const destino = areaPorId(destinoId);
+    if (destino.id === 'cobranza' && !esDevolucion) {
+        const mot = motivoNoCobrable(doc);
+        if (mot) return { ok: false, error: mot, bloqueado: true };
+    }
     const origenId = doc.asignadoA || 'cuentas';
     if (origenId === destino.id) return { ok: false, error: 'ya está en ' + destino.label };
 
@@ -1895,6 +1915,7 @@ __X.agregarAreaDerivacion = agregarAreaDerivacion;
 __X.eliminarAreaDerivacion = eliminarAreaDerivacion;
 __X.areaPorId = areaPorId;
 __X.derivarDocumento = derivarDocumento;
+__X.motivoNoCobrable = motivoNoCobrable;
 __X.devolverDocumento = devolverDocumento;
 __X.documentosDeArea = documentosDeArea;
 __X.conteoPorArea = conteoPorArea;
@@ -2014,6 +2035,7 @@ __X.claseRiesgoDeDoc = claseRiesgoDeDoc;
 __X.cargarCacheRiesgo = cargarCacheRiesgo;
 
 })();
+
 
 
 window.__FIN=(window.__FIN||[]);window.__FIN.push("01_base");</script>
@@ -14698,7 +14720,7 @@ __X.renderLogistica = renderLogistica;
 
 window.__FIN=(window.__FIN||[]);window.__FIN.push("07d_logistica_resto");</script>
 <script>window.__INICIO=(window.__INICIO||[]);window.__INICIO.push("08a_cobranza_datos");
-window.__CONTRATOS = (window.__CONTRATOS||[]);window.__CONTRATOS.push({archivo:"08a_cobranza_datos",provee:["cargarTasas","tasas","guardarTasas","restaurarTasasDefault","getUltimaTasa","getTasaAnualMes","calcularInteresesDetallado","verificarCoberturaTasas","totalesGestion","recalcular","importarTasasDesdeFilas","totalesCobranza","tablaDatosTextoCobranza","textoNivelCobranza","construirCorreoCobranza","urlGmail","construirReporteCobranzaHTML","INCUMPLIMIENTOS","textoFundamentos","textoArgumentosDescargos","CAUSALES_DESCARGOS","cargarPersonalizaciones","getPlantilla","guardarPersonalizada","restaurar","tienePersonalizacion","listaPlantillas","cargarPlantillaDesdeArchivo","renderPlantilla","buildDatosLegal","buildDatosDescargos"],requiere:["store","formatCLP"]});
+window.__CONTRATOS = (window.__CONTRATOS||[]);window.__CONTRATOS.push({archivo:"08a_cobranza_datos",provee:["saldoBaseFactura","saldoFactura","cargarTasas","tasas","guardarTasas","restaurarTasasDefault","getUltimaTasa","getTasaAnualMes","calcularInteresesDetallado","verificarCoberturaTasas","totalesGestion","recalcular","importarTasasDesdeFilas","totalesCobranza","tablaDatosTextoCobranza","textoNivelCobranza","construirCorreoCobranza","urlGmail","construirReporteCobranzaHTML","INCUMPLIMIENTOS","textoFundamentos","textoArgumentosDescargos","CAUSALES_DESCARGOS","cargarPersonalizaciones","getPlantilla","guardarPersonalizada","restaurar","tienePersonalizacion","listaPlantillas","cargarPlantillaDesdeArchivo","renderPlantilla","buildDatosLegal","buildDatosDescargos"],requiere:["store","formatCLP"]});
 (function(){
 const { store } = __X;
 const KEY = 'tasasCMF';
@@ -14787,15 +14809,26 @@ function verificarCoberturaTasas(facturas) {
     if (faltantes > 0) return { ok: false, msg: `Advertencia: Faltan tasas para ${faltantes} mes(es). Se usarán aproximaciones.` };
     return { ok: true, msg: '' };
 }
+function saldoBaseFactura(f) {
+    if (!f) return 0;
+    const v = f.saldo != null && f.saldo !== '' ? Number(f.saldo) : Number(f.montoTotal);
+    return isFinite(v) && v > 0 ? v : 0;
+}
+function saldoFactura(f) {
+    const b = saldoBaseFactura(f);
+    return b > 0 ? b + (Number(f.interesTotal) || 0) : 0;
+}
 function totalesGestion(facturas) {
     let totalFacturasConIVA = 0, totalIntereses = 0;
-    facturas.forEach(f => { totalFacturasConIVA += (f.montoTotal || 0); totalIntereses += (f.interesTotal || 0); });
+    facturas.forEach(f => { totalFacturasConIVA += saldoBaseFactura(f); totalIntereses += saldoBaseFactura(f) > 0 ? (f.interesTotal || 0) : 0; });
     const comision = totalFacturasConIVA * 0.01;
     return { totalFacturasConIVA, totalIntereses, comision, totalCobrar: totalFacturasConIVA + totalIntereses + comision };
 }
 function recalcular(facturas) {
     facturas.forEach(f => {
-        const r = calcularInteresesDetallado(f.montoTotal, f.fechaEmision, f.diasAtraso);
+        const base = saldoBaseFactura(f);
+        if (base <= 0 || !(f.diasAtraso > 0)) { f.interesTotal = 0; f.detalleInteres = []; return; }
+        const r = calcularInteresesDetallado(base, f.fechaEmision, f.diasAtraso);
         f.interesTotal = r.total;
         f.detalleInteres = r.detalle;
     });
@@ -14845,7 +14878,7 @@ async function importarTasasDesdeFilas(rows) {
     const subida = await guardarTasas(existentes);
     return { cantidad: nuevas.length, subida };
 }
-__X.cargarTasas = cargarTasas; __X.tasas = tasas; __X.guardarTasas = guardarTasas; __X.restaurarTasasDefault = restaurarTasasDefault; __X.getUltimaTasa = getUltimaTasa; __X.getTasaAnualMes = getTasaAnualMes; __X.calcularInteresesDetallado = calcularInteresesDetallado; __X.verificarCoberturaTasas = verificarCoberturaTasas; __X.totalesGestion = totalesGestion; __X.recalcular = recalcular; __X.importarTasasDesdeFilas = importarTasasDesdeFilas;
+__X.saldoBaseFactura = saldoBaseFactura; __X.saldoFactura = saldoFactura; __X.cargarTasas = cargarTasas; __X.tasas = tasas; __X.guardarTasas = guardarTasas; __X.restaurarTasasDefault = restaurarTasasDefault; __X.getUltimaTasa = getUltimaTasa; __X.getTasaAnualMes = getTasaAnualMes; __X.calcularInteresesDetallado = calcularInteresesDetallado; __X.verificarCoberturaTasas = verificarCoberturaTasas; __X.totalesGestion = totalesGestion; __X.recalcular = recalcular; __X.importarTasasDesdeFilas = importarTasasDesdeFilas;
 })();
 
 (function(){
@@ -15254,6 +15287,7 @@ function buildDatosDescargos(input) {
 }
 __X.cargarPersonalizaciones = cargarPersonalizaciones; __X.getPlantilla = getPlantilla; __X.guardarPersonalizada = guardarPersonalizada; __X.restaurar = restaurar; __X.tienePersonalizacion = tienePersonalizacion; __X.listaPlantillas = listaPlantillas; __X.cargarPlantillaDesdeArchivo = cargarPlantillaDesdeArchivo; __X.renderPlantilla = renderPlantilla; __X.buildDatosLegal = buildDatosLegal; __X.buildDatosDescargos = buildDatosDescargos;
 })();
+
 window.__FIN=(window.__FIN||[]);window.__FIN.push("08a_cobranza_datos");</script>
 
 <script>window.__INICIO=(window.__INICIO||[]);window.__INICIO.push("08b_cobranza_ui");
@@ -15400,7 +15434,20 @@ async function cargarEstado() {
     }
     try {
         const docsCC = await __X.store.lista('cuentasCorrientes');
-        const derivados = (docsCC || []).filter(d => d.asignadoA === 'cobranza');
+        const nr = v => String(v || '').toLowerCase().replace(/[^0-9k]/g, '');
+        const mapaCC = {};
+        (docsCC || []).forEach(d => { if (d._eliminado === true) return; mapaCC[String(d.factura || d.numero || '').trim() + '|' + nr(d.rut)] = d; });
+        (estado.facturas || []).forEach(f => {
+            const d = mapaCC[String(f.factura || f.numero || '').trim() + '|' + nr(f.rut)];
+            if (!d) return;
+            const sal = Math.max(0, Number(d.saldo != null ? d.saldo : (d.monto || 0)) || 0);
+            f.saldo = sal;
+            if (d.monto != null) f.montoTotal = Number(d.monto) || f.montoTotal;
+            if (d.vencimiento) f.vencimiento = d.vencimiento;
+            f.diasAtraso = sal > 0 ? (d.vencimiento ? calcDiasAtraso(d.vencimiento) : (d.diasAtraso || 0)) : 0;
+            if (sal <= 0) { f.interesTotal = 0; f.detalleInteres = []; }
+        });
+        const derivados = (docsCC || []).filter(d => d.asignadoA === 'cobranza' && d._eliminado !== true);
         const nums = new Set((estado.facturas || []).map(f => f.numero || f.factura));
         derivados.forEach(d => {
             const num = d.factura || d.numero;
@@ -15411,8 +15458,10 @@ async function cargarEstado() {
                 fechaEmision: d.fechaEmision || '',
                 plazoVenc: d.plazoVenc || 30,
                 montoTotal: d.monto || d.montoTotal || 0,
-                interesTotal: d.interesTotal || 0,
-                diasAtraso: d.diasAtraso || 0,
+                saldo: Math.max(0, Number(d.saldo != null ? d.saldo : (d.monto || d.montoTotal || 0)) || 0),
+                vencimiento: d.vencimiento || '',
+                interesTotal: (Number(d.saldo) || 0) > 0 ? (d.interesTotal || 0) : 0,
+                diasAtraso: (Number(d.saldo) || 0) > 0 ? (d.vencimiento ? calcDiasAtraso(d.vencimiento) : (d.diasAtraso || 0)) : 0,
                 seleccionado: false, bitacora: __X.normalizarBitacora ? __X.normalizarBitacora(d.bitacora) : (d.bitacora || []),
                 enGestion: false, origenCC: true
             });
@@ -15678,7 +15727,7 @@ const GETTERS = {
     uf: f => String(f.uf || 0),
     monto: f => formatCLP(f.montoTotal || 0),
     interes: f => formatCLP(f.interesTotal || 0),
-    saldo: f => formatCLP((f.saldo != null ? f.saldo : f.montoTotal || 0) + (f.interesTotal || 0))
+    saldo: f => formatCLP(__X.saldoFactura(f))
 };
 
 async function renderFacturas(box) {
@@ -16079,7 +16128,7 @@ function _refrescar(box) {
     if(_cfDiasMax !== null) _datosBase=_datosBase.filter(f=>(f.diasAtraso||0)<=_cfDiasMax);
  
     if(_cfEst) _datosBase=_datosBase.filter(f=>{
-        const saldo = (f.saldo != null ? f.saldo : f.montoTotal) + (f.interesTotal || 0);
+        const saldo = __X.saldoFactura(f);
         const est = saldo <= 0 ? 'Pagada' : ((f.diasAtraso||0) > 0 ? 'Vencida' : 'Vigente');
         return est === _cfEst;
     });
@@ -16121,7 +16170,7 @@ function _refrescar(box) {
             <td style="text-align:right">${f.uf || 0}</td>
             <td style="text-align:right">${formatCLP(f.montoTotal)}</td>
             <td style="text-align:right">${formatCLP(f.interesTotal || 0)}</td>
-            <td style="text-align:right">${formatCLP((f.saldo != null ? f.saldo : f.montoTotal) + (f.interesTotal || 0))}</td>
+            <td style="text-align:right">${formatCLP(__X.saldoFactura(f))}</td>
             <td class="erp-acciones-celda"><button class="btn-icon btn-primary" data-bit="${idx}" title="Bitácora de gestiones">📋${(f.bitacora || []).length ? `<sup>${f.bitacora.length}</sup>` : ''}</button><button class="btn-icon btn-success btnPagoCob" title="Registrar pago"${tienePermisoGranular(getRolActual(), 'cobranza:registrar_pago') ? '' : ' disabled style="visibility:hidden"'}>💵</button><button class="btn-icon btn-secondary" data-edit="${idx}" title="Editar documento">✏️</button><button class="btn-icon btn-outline btnCto" title="${_nContactos(f.rut) ? _nContactos(f.rut) + ' contacto(s) registrados' : 'Sin contactos registrados'}">&#128269;${_nContactos(f.rut) ? `<sup>${_nContactos(f.rut)}</sup>` : ''}</button><button class="btn-icon btn-success" data-mail="${idx}" title="Enviar correo por este documento">✉️</button><button class="btn-danger btn-icon" data-del="${idx}" title="Eliminar documento">✕</button></td>`;
         tr.querySelector('.fChk').addEventListener('change', e => { f.seleccionado = e.target.checked; guardarEstado(); _refrescar(box); _sincronizarDeudor(box); });
         tr.querySelector('[data-bit]').addEventListener('click', () => abrirBitacoraFactura(f, box.querySelector('#facModal'), () => _refrescar(box)));
@@ -18201,8 +18250,11 @@ const { store, toast } = __X;
 const { llamar, llamarLento, servidorDisponible } = __X;
 const KEY = 'cuentasCorrientes';
 let _docs = [];
+let _hist = [];
 
 function docs(){ return _docs; }
+function historicos(){ return _hist; }
+function esHistoricoCC(d){ return !!d && (d.historico === true || String(d.historico).toLowerCase() === 'true'); }
 
 const CC_CAMPOS_JSON = ['multaDetalle', 'historialAsignacion', 'adjuntos', 'contactos', 'bitacora', 'rutaAreas', 'derivaciones', 'aplicacionesNC', 'ncOrigenes', 'movimientos', 'planRecuperacion'];
 function _serializarCC(campos){
@@ -18364,13 +18416,64 @@ async function cargar(){
         const sinIdentidad = !String(d.factura || d.numero || '').trim() && !String(d.rut || '').trim();
         return !sinIdentidad;
     });
-    _docs.forEach(function(d){
+    _hist = _docs.filter(esHistoricoCC);
+    _docs = _docs.filter(function(d){ return !esHistoricoCC(d); });
+    _docs.concat(_hist).forEach(function(d){
         try { recalcularDocCC(d); }
         catch(e) { console.error('recalcularDocCC fallo para', d && d.id, e.message); }
     });
     return _docs;
 }
-function guardar(){ store.guardarLista(KEY, _docs); }
+function guardar(){ store.guardarLista(KEY, _docs.concat(_hist)); }
+
+function _saldoCeroCC(d){
+    if (d.tipoDoc === 'NC') {
+        if (d.ncAplicada === true) return true;
+        return typeof d.montoDisponibleNC === 'number' && d.montoDisponibleNC <= 0 && (d.aplicacionesNC || []).length > 0;
+    }
+    return (Number(d.saldo) || 0) <= 0 && (Number(d.monto) || 0) > 0;
+}
+function pasarAHistorico(d, motivo, usuario){
+    if (!d || esHistoricoCC(d)) return false;
+    const i = _docs.indexOf(d);
+    if (i >= 0) _docs.splice(i, 1);
+    const ahora = new Date().toISOString();
+    d.historico = true;
+    d.fechaHistorico = ahora;
+    d.motivoHistorico = motivo || '';
+    d.actualizado = ahora;
+    (d.bitacora = d.bitacora || []).push({ fecha: ahora.slice(0, 10), texto: 'Pasó a histórico' + (motivo ? ': ' + motivo : '') + (usuario ? ' (usuario: ' + usuario + ')' : '') });
+    _hist.push(d);
+    return true;
+}
+function reactivarHistorico(d, motivo, usuario){
+    if (!d || !esHistoricoCC(d)) return false;
+    const i = _hist.indexOf(d);
+    if (i >= 0) _hist.splice(i, 1);
+    const ahora = new Date().toISOString();
+    d.historico = false;
+    d.motivoHistorico = '';
+    d.actualizado = ahora;
+    (d.bitacora = d.bitacora || []).push({ fecha: ahora.slice(0, 10), texto: 'Reactivado desde histórico' + (motivo ? ': ' + motivo : '') + (usuario ? ' (usuario: ' + usuario + ')' : '') });
+    _docs.push(d);
+    return true;
+}
+function archivarSaldoCero(usuario, motivo){
+    const movidos = _docs.filter(_saldoCeroCC);
+    movidos.forEach(function(d){ pasarAHistorico(d, motivo || 'Saldo cero', usuario); });
+    if (movidos.length) guardar();
+    return movidos;
+}
+function archivarSiSaldoCero(d, usuario, motivo){
+    if (!d || esHistoricoCC(d) || !_saldoCeroCC(d)) return false;
+    const ok = pasarAHistorico(d, motivo || 'Saldo cero', usuario);
+    if (ok) guardar();
+    return ok;
+}
+async function subirHistoricoCC(lista, usuario){
+    if (!lista || !lista.length || !__X.fusionarCamposCC) return;
+    await Promise.all(lista.map(function(d){ return __X.fusionarCamposCC(d, d, usuario).catch(function(){}); }));
+}
 function push(d){ if(!d.id) d.id = _nuevoIdCC(); _docs.push(d); }
 function removeAt(i){ _docs.splice(i, 1); }
 function indexOf(d){ return _docs.indexOf(d); }
@@ -18585,6 +18688,13 @@ function parsearBitacoraCC(texto){
 
 __X.KEY = KEY;
 __X.docs = docs;
+__X.historicos = historicos;
+__X.esHistoricoCC = esHistoricoCC;
+__X.pasarAHistorico = pasarAHistorico;
+__X.reactivarHistorico = reactivarHistorico;
+__X.archivarSaldoCero = archivarSaldoCero;
+__X.archivarSiSaldoCero = archivarSiSaldoCero;
+__X.subirHistoricoCC = subirHistoricoCC;
 __X.cargar = cargar;
 __X.guardar = guardar;
 __X.push = push;
@@ -18796,6 +18906,7 @@ function abrirModalCC(doc, host, onSave){
 
         guardar();
         let sincronizado = true, soloLocal = false, errorTxt = '';
+        __X.archivarSiSaldoCero(d, nombreU, 'Saldo cero al registrar pago');
         if (__X.fusionarCamposCC) {
             const r = await __X.fusionarCamposCC(d, d, nombreU).catch(e => ({ ok: false, error: e && e.message }));
             if (r && r.offline) { soloLocal = true; sincronizado = false; }
@@ -19159,6 +19270,7 @@ function registrarMovimientoCC(doc, host, onChange){
 
         guardar();
         let sincronizado = true, soloLocal = false, errorTxt = '';
+        __X.archivarSiSaldoCero(doc, nombreU, 'Saldo cero al registrar pago');
         if (__X.fusionarCamposCC) {
             const r = await __X.fusionarCamposCC(doc, doc, nombreU).catch(e => ({ ok: false, error: e && e.message }));
             if (r && r.offline) { soloLocal = true; sincronizado = false; }
@@ -19176,68 +19288,133 @@ function registrarMovimientoCC(doc, host, onChange){
 }
 
 function aplicarNotaCredito(host, onChange){
-    const todos = __X.docs ? __X.docs() : [];
+    const todos = (__X.docs ? __X.docs() : []).concat(__X.historicos ? __X.historicos() : []);
     const disponibleDe = nc => {
         if (typeof nc.montoDisponibleNC === 'number') return nc.montoDisponibleNC;
         const total = Math.abs(nc.monto || nc.notaCredito || 0);
         const yaAplicado = (nc.aplicacionesNC || []).reduce((a, x) => a + (x.monto || 0), 0);
         return Math.max(0, total - yaAplicado);
     };
-    const rutsConNC = [...new Set(todos.filter(d => d.tipoDoc === 'NC' && !d.ncAplicada && disponibleDe(d) > 0).map(d => d.rut))];
+    const normRut = r => String(r || '').replace(/[.\s]/g, '').toUpperCase();
+    const fechaCorta = f => String(f || '').slice(0, 10);
+    const esHist = d => __X.esHistoricoCC && __X.esHistoricoCC(d);
+    const ncsLibres = () => todos.filter(d => d.tipoDoc === 'NC' && !esHist(d) && !d.ncAplicada && disponibleDe(d) > 0);
+    const fcsLibres = () => todos.filter(d => d.tipoDoc !== 'NC' && !esHist(d) && (d.saldo || 0) > 0);
+    let rutSel = '';
+    let selNC = new Set();
+    let selFC = new Set();
+
+    const clientes = () => {
+        const m = {};
+        ncsLibres().forEach(d => {
+            const k = normRut(d.rut);
+            if (!k) return;
+            const c = m[k] = m[k] || { rut: d.rut, razon: d.razon || '', n: 0, total: 0 };
+            c.n++;
+            c.total += disponibleDe(d);
+            if (!c.razon && d.razon) c.razon = d.razon;
+        });
+        return Object.keys(m).map(k => Object.assign({ key: k }, m[k])).sort((a, b) => String(a.razon).localeCompare(String(b.razon)));
+    };
 
     const pintarBusqueda = () => {
         host.innerHTML = `
-        <div class="modal open"><div class="modal-panel" style="max-width:760px;">
+        <div class="modal open"><div class="modal-panel modal-panel-xl" style="max-width:1180px;width:96vw;">
             <div class="modal-header"><h3>🔗 Buscar y aplicar Nota de Crédito</h3><button class="modal-close" id="ancX">✕</button></div>
             <div class="modal-body">
-                <div class="filter-field"><label>RUT del cliente</label>
-                    <input id="ancRut" list="ancRutList" placeholder="Escribe o elige un RUT con N/C sin aplicar...">
-                    <datalist id="ancRutList">${rutsConNC.map(r => `<option value="${escAttr(r)}">`).join('')}</datalist>
+                <div class="filter-field"><label>Cliente (RUT o razón social)</label>
+                    <input id="ancBuscar" placeholder="Escribe parte del RUT o de la razón social…" autocomplete="off">
                 </div>
-                <div class="page-subtitle">${rutsConNC.length} cliente(s) con Notas de Crédito con saldo disponible.</div>
+                <div id="ancClientes" style="margin:8px 0;"></div>
                 <div id="ancResultado" style="margin-top:10px;"></div>
             </div>
             <div class="modal-footer"><button class="btn-outline btn-sm" id="ancCancel">Cerrar</button></div>
         </div></div>`;
         host.querySelector('#ancX').addEventListener('click', () => { host.innerHTML = ''; });
         host.querySelector('#ancCancel').addEventListener('click', () => { host.innerHTML = ''; });
-        host.querySelector('#ancRut').addEventListener('input', e => pintarResultado(e.target.value.trim()));
+        const inp = host.querySelector('#ancBuscar');
+        const pintarLista = () => {
+            const q = inp.value.trim().toLowerCase();
+            const qn = normRut(q).toLowerCase();
+            const lista = clientes().filter(c => !q || String(c.razon).toLowerCase().includes(q) || normRut(c.rut).toLowerCase().includes(qn || '\u0000'));
+            const caja = host.querySelector('#ancClientes');
+            caja.innerHTML = '<div class="page-subtitle" style="margin-bottom:4px;">' + lista.length + ' cliente(s) con Notas de Crédito disponibles</div>' +
+                (lista.length ? '<div class="table-wrap" style="max-height:170px;overflow:auto;"><table><thead><tr><th>RUT</th><th>Razón social</th><th style="text-align:center;">N/C</th><th style="text-align:right;">Disponible</th></tr></thead><tbody>' +
+                lista.slice(0, 60).map(c => `<tr class="anc-cli" data-rut="${escAttr(c.rut)}" style="cursor:pointer;${normRut(c.rut) === normRut(rutSel) ? 'background:#ede9fe;' : ''}"><td>${escH(c.rut)}</td><td>${escH(c.razon)}</td><td style="text-align:center;">${c.n}</td><td style="text-align:right;">${formatCLP(c.total)}</td></tr>`).join('') +
+                '</tbody></table></div>' : '');
+            caja.querySelectorAll('.anc-cli').forEach(tr => tr.addEventListener('click', () => { pintarResultado(tr.dataset.rut); pintarLista(); }));
+            if (lista.length === 1 && q && normRut(lista[0].rut) !== normRut(rutSel)) { pintarResultado(lista[0].rut); }
+        };
+        inp.addEventListener('input', pintarLista);
+        pintarLista();
+        if (rutSel) pintarResultado(rutSel);
     };
 
     const pintarResultado = (rut) => {
+        if (normRut(rut) !== normRut(rutSel)) { selNC = new Set(); selFC = new Set(); }
+        rutSel = rut;
         const zona = host.querySelector('#ancResultado');
         if (!zona) return;
         if (!rut) { zona.innerHTML = ''; return; }
-        const rutNorm = rut.replace(/[.\s]/g, '').toUpperCase();
-        const ncs = todos.filter(d => d.tipoDoc === 'NC' && !d.ncAplicada && disponibleDe(d) > 0 && String(d.rut||'').replace(/[.\s]/g,'').toUpperCase() === rutNorm);
-        const fcs = todos.filter(d => d.tipoDoc !== 'NC' && (d.saldo||0) > 0 && String(d.rut||'').replace(/[.\s]/g,'').toUpperCase() === rutNorm);
-        if (!ncs.length) { zona.innerHTML = '<div class="warn">Este RUT no tiene Notas de Crédito con saldo disponible.</div>'; return; }
-        if (!fcs.length) { zona.innerHTML = '<div class="warn">Este RUT no tiene facturas con saldo pendiente.</div>'; return; }
-        zona.innerHTML = ncs.map(nc => {
-            const disp = disponibleDe(nc);
+        const rutNorm = normRut(rut);
+        const ncs = ncsLibres().filter(d => normRut(d.rut) === rutNorm).sort((a, b) => String(a.fechaEmision || '').localeCompare(String(b.fechaEmision || '')));
+        const fcs = fcsLibres().filter(d => normRut(d.rut) === rutNorm).sort((a, b) => String(a.vencimiento || a.fechaEmision || '').localeCompare(String(b.vencimiento || b.fechaEmision || '')));
+        const ncsHist = todos.filter(d => d.tipoDoc === 'NC' && normRut(d.rut) === rutNorm && (d.aplicacionesNC || []).length);
+        const razon = (ncs[0] || fcs[0] || ncsHist[0] || {}).razon || '';
+        const celdasCli = d => `<td>${escH(d.rut || '')}</td><td>${escH(d.razon || '')}</td>`;
+        const tablaNC = ncs.length ? `<table><thead><tr><th></th><th>N/C</th><th>RUT</th><th>Razón social</th><th>Fecha</th><th style="text-align:right;">Monto</th><th style="text-align:right;">Disponible</th></tr></thead><tbody>${ncs.map(nc => `
+            <tr><td><input type="checkbox" class="anc-chk-nc" data-id="${escAttr(nc.id)}"${selNC.has(nc.id) ? ' checked' : ''}></td><td><b>${escH(nc.factura || nc.numero || '')}</b></td>${celdasCli(nc)}<td>${escH(fechaCorta(nc.fechaEmision))}</td><td style="text-align:right;">${formatCLP(Math.abs(nc.monto || nc.notaCredito || 0))}</td><td style="text-align:right;color:#7c3aed;font-weight:700;">${formatCLP(disponibleDe(nc))}</td></tr>`).join('')}</tbody></table>` : '<div class="warn">Este cliente no tiene Notas de Crédito con saldo disponible.</div>';
+        const tablaFC = fcs.length ? `<table><thead><tr><th></th><th>Factura</th><th>RUT</th><th>Razón social</th><th>Fecha</th><th>Vence</th><th style="text-align:right;">Monto</th><th style="text-align:right;">Saldo</th></tr></thead><tbody>${fcs.map(fc => `
+            <tr><td><input type="checkbox" class="anc-chk-fc" data-id="${escAttr(fc.id)}"${selFC.has(fc.id) ? ' checked' : ''}></td><td><b>${escH(fc.factura || fc.numero || '')}</b></td>${celdasCli(fc)}<td>${escH(fechaCorta(fc.fechaEmision))}</td><td>${escH(fechaCorta(fc.vencimiento))}</td><td style="text-align:right;">${formatCLP(fc.monto || 0)}</td><td style="text-align:right;font-weight:700;">${formatCLP(fc.saldo || 0)}</td></tr>`).join('')}</tbody></table>` : '<div class="warn">Este cliente no tiene facturas con saldo pendiente.</div>';
+        const historialHtml = ncsHist.length ? `<h4 style="margin:14px 0 6px;">Aplicaciones registradas</h4>` + ncsHist.map(nc => {
             const historial = (nc.aplicacionesNC || []);
-            return `
-            <div style="border:1px solid #e2e8f0;border-radius:8px;padding:8px;margin-bottom:8px;">
-                <div style="font-weight:700;color:#7c3aed;">N/C ${escH(nc.factura)} — Disponible ${formatCLP(disp)} de ${formatCLP(Math.abs(nc.monto||nc.notaCredito||0))}</div>
-                ${historial.length ? `<div class="page-subtitle" style="margin:2px 0 4px;">
-                    ${historial.map(h => h.reversada
-                        ? `<span style="text-decoration:line-through;color:#94a3b8;">${escH(h.factura)} (${formatCLP(h.monto)})</span>`
-                        : `${escH(h.factura)} (${formatCLP(h.monto)}) ${_puede('finanzas:revertir_movimiento') ? '<button class="btn-outline btn-sm anc-revertir" data-nc="' + escAttr(nc.id) + '" data-mov="' + escAttr(h.movimientoId || '') + '" style="padding:1px 6px;font-size:10px;">↩️ Revertir</button>' : ''}`
-                    ).join(' · ')}
-                </div>` : ''}
-                <div class="page-subtitle" style="margin:4px 0 6px;">Elige la factura y el monto a aplicar:</div>
-                ${fcs.map(fc => {
-                    const sugerido = Math.min(disp, fc.saldo);
-                    return `
-                    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:4px 0;border-top:1px solid #f1f5f9;">
-                        <span>📄 ${escH(fc.factura)} — Saldo ${formatCLP(fc.saldo)}</span>
-                        <input type="number" class="anc-monto" data-nc="${escAttr(nc.id)}" data-fc="${escAttr(fc.id)}" data-max="${sugerido}"
-                               value="${sugerido}" min="1" max="${sugerido}" style="width:120px;text-align:right;">
-                        <button class="btn-success btn-sm anc-aplicar" data-nc="${escAttr(nc.id)}" data-fc="${escAttr(fc.id)}">Aplicar</button>
-                    </div>`;
-                }).join('')}
+            return `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:6px 8px;margin-bottom:6px;">
+                <b style="color:#7c3aed;">N/C ${escH(nc.factura || nc.numero || '')}</b> <span class="page-subtitle">Disponible ${formatCLP(disponibleDe(nc))} de ${formatCLP(Math.abs(nc.monto || nc.notaCredito || 0))}${esHist(nc) ? ' · en histórico' : ''}</span>
+                <div class="page-subtitle" style="margin-top:3px;">${historial.map(h => h.reversada
+                    ? `<span style="text-decoration:line-through;color:#94a3b8;">${escH(h.factura)} (${formatCLP(h.monto)})</span>`
+                    : `${escH(h.factura)} (${formatCLP(h.monto)}) ${_puede('finanzas:revertir_movimiento') ? '<button class="btn-outline btn-sm anc-revertir" data-nc="' + escAttr(nc.id) + '" data-mov="' + escAttr(h.movimientoId) + '">↩ Revertir</button>' : ''}`
+                ).join(' · ')}</div></div>`;
+        }).join('') : '';
+        zona.innerHTML = `
+            <div style="border-top:1px solid #e2e8f0;padding-top:10px;">
+                <div style="font-weight:700;margin-bottom:8px;">${escH(razon)} <span class="page-subtitle">· RUT ${escH(rut)}</span></div>
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:12px;">
+                    <div><h4 style="margin:0 0 4px;">Notas de crédito</h4><div class="table-wrap" style="max-height:300px;overflow:auto;">${tablaNC}</div></div>
+                    <div><h4 style="margin:0 0 4px;">Facturas con saldo</h4><div class="table-wrap" style="max-height:300px;overflow:auto;">${tablaFC}</div></div>
+                </div>
+                <div id="ancPlan" style="margin-top:10px;"></div>
+                ${historialHtml}
             </div>`;
-        }).join('');
+        const calcularPlan = () => {
+            const origen = ncs.filter(n => selNC.has(n.id)).map(n => ({ doc: n, resto: disponibleDe(n) }));
+            const destino = fcs.filter(f => selFC.has(f.id));
+            const plan = [];
+            destino.forEach(fc => {
+                let falta = fc.saldo || 0;
+                origen.forEach(o => {
+                    if (falta <= 0 || o.resto <= 0) return;
+                    const m = Math.min(falta, o.resto);
+                    plan.push({ nc: o.doc, fc, monto: m });
+                    falta -= m;
+                    o.resto -= m;
+                });
+            });
+            return { plan, totNC: origen.reduce((a, o) => a + disponibleDe(o.doc), 0), totFC: destino.reduce((a, f) => a + (f.saldo || 0), 0) };
+        };
+        const pintarPlan = () => {
+            const caja = zona.querySelector('#ancPlan');
+            const { plan, totNC, totFC } = calcularPlan();
+            const aplicar = plan.reduce((a, p) => a + p.monto, 0);
+            caja.innerHTML = `<div class="info" style="display:flex;flex-wrap:wrap;gap:16px;align-items:center;">
+                <span>N/C seleccionadas: <b>${formatCLP(totNC)}</b></span><span>Facturas seleccionadas: <b>${formatCLP(totFC)}</b></span><span>A aplicar: <b>${formatCLP(aplicar)}</b></span>
+                <button class="btn-success btn-sm" id="ancAplicar"${aplicar > 0 ? '' : ' disabled'}>Aplicar</button></div>` +
+                (plan.length ? `<div class="table-wrap" style="margin-top:6px;"><table><thead><tr><th>N/C</th><th>Factura</th><th style="text-align:right;">Monto a aplicar</th></tr></thead><tbody>${plan.map(p => `<tr><td>${escH(p.nc.factura || '')}</td><td>${escH(p.fc.factura || '')}</td><td style="text-align:right;">${formatCLP(p.monto)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="page-subtitle" style="margin-top:6px;">Marca una o más N/C y una o más facturas. El monto se reparte de la factura más antigua a la más nueva.</div>');
+            const btn = caja.querySelector('#ancAplicar');
+            if (btn) btn.addEventListener('click', () => ejecutar(plan, btn));
+        };
+        zona.querySelectorAll('.anc-chk-nc').forEach(c => c.addEventListener('change', () => { if (c.checked) selNC.add(c.dataset.id); else selNC.delete(c.dataset.id); pintarPlan(); }));
+        zona.querySelectorAll('.anc-chk-fc').forEach(c => c.addEventListener('change', () => { if (c.checked) selFC.add(c.dataset.id); else selFC.delete(c.dataset.id); pintarPlan(); }));
+        pintarPlan();
         zona.querySelectorAll('.anc-revertir').forEach(btn => btn.addEventListener('click', async () => {
             if (btn.disabled) return;
             const nc = todos.find(d => d.id === btn.dataset.nc);
@@ -19271,6 +19448,7 @@ function aplicarNotaCredito(host, onChange){
             app.motivoReverso = motivo;
             nc.montoDisponibleNC = (nc.montoDisponibleNC || 0) + app.monto;
             nc.ncAplicada = false;
+            if (__X.esHistoricoCC(nc)) __X.reactivarHistorico(nc, 'Reverso de aplicación de N/C', nombreU);
             (nc.bitacora = nc.bitacora || []).push({ fecha, texto: `REVERSO: aplicación de ${formatCLP(app.monto)} a factura ${app.factura} revertida por ${nombreU}. Motivo: ${motivo}` });
 
             if (fc) {
@@ -19279,6 +19457,7 @@ function aplicarNotaCredito(host, onChange){
                 if (appFc) { appFc.reversada = true; appFc.reversadoPor = nombreU; appFc.fechaReverso = fecha; }
                 (fc.bitacora = fc.bitacora || []).push({ fecha, texto: `REVERSO: N/C ${nc.factura} por ${formatCLP(app.monto)} revertida por ${nombreU}. Motivo: ${motivo}` });
                 if (__X.recalcularDocCC) __X.recalcularDocCC(fc);
+                if (__X.esHistoricoCC(fc) && (fc.saldo || 0) > 0) __X.reactivarHistorico(fc, 'Reverso de aplicación de N/C', nombreU);
             }
 
             guardar();
@@ -19292,65 +19471,54 @@ function aplicarNotaCredito(host, onChange){
             if (onChange) onChange();
             pintarResultado(rut);
         }));
-        zona.querySelectorAll('.anc-aplicar').forEach(btn => btn.addEventListener('click', async () => {
-            if (btn.disabled) return;
-            const nc = todos.find(d => d.id === btn.dataset.nc);
-            const fc = todos.find(d => d.id === btn.dataset.fc);
-            if (!nc || !fc) return;
-            const input = zona.querySelector('.anc-monto[data-nc="' + btn.dataset.nc + '"][data-fc="' + btn.dataset.fc + '"]');
-            const monto = parseFloat(input ? input.value : 0) || 0;
-            const disp = disponibleDe(nc);
 
-            if (monto <= 0) { toast('Ingresa un monto mayor a cero', 'error'); return; }
-            if (monto > disp) { toast('El monto excede lo disponible en la N/C (' + formatCLP(disp) + ')', 'error'); return; }
-            if (monto > (fc.saldo || 0)) { toast('El monto excede el saldo de la factura (' + formatCLP(fc.saldo) + ')', 'error'); return; }
-            if (!confirm(`¿Aplicar ${formatCLP(monto)} de la N/C ${nc.factura} a la factura ${fc.factura}?`)) return;
-
+        const ejecutar = async (plan, btn) => {
+            if (!plan.length) return;
+            const total = plan.reduce((a, p) => a + p.monto, 0);
+            if (!confirm('¿Aplicar ' + formatCLP(total) + ' en ' + plan.length + ' movimiento(s)?')) return;
             btn.disabled = true;
             const usuarioActual = getUsuarioActual();
             const nombreU = usuarioActual ? usuarioActual.nombre : '';
             const fecha = new Date().toISOString().split('T')[0];
-            const movimientoId = 'ncapp-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
-            if ((nc.aplicacionesNC || []).some(a => a.movimientoId === movimientoId)) { btn.disabled = false; return; }
-
-            nc.montoDisponibleNC = Math.max(0, disp - monto);
-            nc.aplicacionesNC = nc.aplicacionesNC || [];
-            nc.aplicacionesNC.push({ movimientoId, facturaId: fc.id, factura: fc.factura, monto, fecha, usuario: nombreU, reversada: false });
-            nc.ncAplicada = nc.montoDisponibleNC <= 0;
-            nc.facturaOrigenNC = fc.factura;
-            (nc.bitacora = nc.bitacora || []).push({ fecha, texto: `N/C aplicada a factura ${fc.factura} por ${formatCLP(monto)} (usuario: ${nombreU})${nc.montoDisponibleNC > 0 ? ' — quedan ' + formatCLP(nc.montoDisponibleNC) + ' disponibles' : ' — N/C completamente aplicada'}` });
-
-            fc.notaCredito = (fc.notaCredito || 0) + monto;
-            fc.ncOrigenes = fc.ncOrigenes || [];
-            fc.ncOrigenes.push({ movimientoId, ncId: nc.id, ncFactura: nc.factura, monto, fecha, usuario: nombreU, reversada: false });
-            fc.facturaOrigenNC = nc.factura;
-            (fc.bitacora = fc.bitacora || []).push({ fecha, texto: `N/C ${nc.factura} aplicada por ${formatCLP(monto)} (usuario: ${nombreU})` });
-            if (__X.recalcularDocCC) __X.recalcularDocCC(fc);
-
+            const tocados = new Set();
+            plan.forEach(p => {
+                const nc = p.nc, fc = p.fc, monto = p.monto;
+                const movimientoId = 'ncapp-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+                nc.montoDisponibleNC = Math.max(0, disponibleDe(nc) - monto);
+                nc.aplicacionesNC = nc.aplicacionesNC || [];
+                nc.aplicacionesNC.push({ movimientoId, facturaId: fc.id, factura: fc.factura, monto, fecha, usuario: nombreU, reversada: false });
+                nc.ncAplicada = nc.montoDisponibleNC <= 0;
+                nc.facturaOrigenNC = fc.factura;
+                (nc.bitacora = nc.bitacora || []).push({ fecha, texto: 'N/C aplicada a factura ' + fc.factura + ' por ' + formatCLP(monto) + ' (usuario: ' + nombreU + ')' + (nc.montoDisponibleNC > 0 ? ' — quedan ' + formatCLP(nc.montoDisponibleNC) : '') });
+                fc.notaCredito = (fc.notaCredito || 0) + monto;
+                fc.ncOrigenes = fc.ncOrigenes || [];
+                fc.ncOrigenes.push({ movimientoId, ncId: nc.id, ncFactura: nc.factura, monto, fecha, usuario: nombreU, reversada: false });
+                fc.facturaOrigenNC = nc.factura;
+                (fc.bitacora = fc.bitacora || []).push({ fecha, texto: 'N/C ' + nc.factura + ' aplicada por ' + formatCLP(monto) + ' (usuario: ' + nombreU + ')' });
+                if (__X.recalcularDocCC) __X.recalcularDocCC(fc);
+                nc.actualizado = new Date().toISOString();
+                fc.actualizado = nc.actualizado;
+                tocados.add(nc);
+                tocados.add(fc);
+            });
+            tocados.forEach(d => { __X.archivarSiSaldoCero(d, nombreU, d.tipoDoc === 'NC' ? 'N/C totalmente aplicada' : 'Saldo cero al aplicar N/C'); });
             guardar();
             let sincronizado = true, soloLocal = false, errorSubida = '';
             if (__X.fusionarCamposCC) {
-                const [rNc, rFc] = await Promise.all([
-                    __X.fusionarCamposCC(nc, nc, nombreU).catch(e => ({ ok: false, error: e && e.message })),
-                    __X.fusionarCamposCC(fc, fc, nombreU).catch(e => ({ ok: false, error: e && e.message }))
-                ]);
-                [['N/C', rNc], ['factura', rFc]].forEach(([etiqueta, r]) => {
+                const rs = await Promise.all(Array.from(tocados).map(d => __X.fusionarCamposCC(d, d, nombreU).catch(e => ({ ok: false, error: e && e.message }))));
+                rs.forEach(r => {
                     if (r && r.offline) { soloLocal = true; sincronizado = false; }
-                    else if (!r || r.ok === false) { sincronizado = false; errorSubida = (errorSubida ? errorSubida + ' y ' : '') + ((r && r.error) || ('la ' + etiqueta)); }
+                    else if (!r || r.ok === false) { sincronizado = false; errorSubida = (r && r.error) || 'error desconocido'; }
                 });
             }
-            if (sincronizado) {
-                toast('✓ N/C aplicada y sincronizada' + (nc.montoDisponibleNC > 0 ? ' — quedan ' + formatCLP(nc.montoDisponibleNC) + ' disponibles' : ''), 'success');
-            } else if (soloLocal && !errorSubida) {
-                toast('✓ Guardado localmente — ⚠ pendiente de sincronización (sin conexión)', 'warn', 6000);
-            } else {
-                toast('⚠ Guardado localmente, no se pudo sincronizar (' + errorSubida + ')', 'warn', 6000);
-            }
+            if (sincronizado) toast('✓ N/C aplicada y sincronizada (' + plan.length + ' movimiento(s))', 'success');
+            else if (soloLocal && !errorSubida) toast('✓ Guardado localmente — ⚠ pendiente de sincronización (sin conexión)', 'warn', 6000);
+            else toast('⚠ Guardado localmente, no se pudo sincronizar (' + errorSubida + ')', 'warn', 6000);
+            selNC = new Set();
+            selFC = new Set();
             if (onChange) onChange();
-
-            if (nc.montoDisponibleNC > 0) { pintarResultado(rut); }
-            else { host.innerHTML = ''; }
-        }));
+            pintarBusqueda();
+        };
     };
 
     pintarBusqueda();
@@ -19793,8 +19961,9 @@ function _dibujar(){
             <span class="erp-acciones-pie-titulo">ACCIONES Y REPORTES</span>
             <button class="btn-secondary btn-sm" id="btnGenClientes" title="Extrae los RUT únicos de esta cartera y los da de alta como clientes">👤 Generar base de clientes</button>
             ${_puede('finanzas:exportar') ? '<button class="btn-outline btn-sm" id="btnExport">📊 Exportar</button>' : ''}
-            ${_puede('finanzas:eliminar') ? '<button class="btn-danger btn-sm" id="btnEliminarPagados">🧹 Eliminar pagados ($0)</button>' : ''}
-            ${_puede('finanzas:eliminar') ? '<button class="btn-danger btn-sm" id="btnEliminar" title="Requiere clave de administrador">🗑️ Eliminar seleccionados</button>' : ''}
+            <button class="btn-outline btn-sm" id="btnHistoricoCC">📚 Histórico</button>
+            ${_puede('finanzas:eliminar') ? '<button class="btn-secondary btn-sm" id="btnEliminarPagados" title="Mueve al histórico los documentos con saldo cero">🗄️ Pagados ($0) a histórico</button>' : ''}
+            ${_puede('finanzas:eliminar') ? '<button class="btn-secondary btn-sm" id="btnEliminar" title="Mueve al histórico los documentos seleccionados">🗄️ Seleccionados a histórico</button>' : ''}
             <span class="sep"></span>
             <div class="filter-field" style="flex-direction:row;align-items:center;gap:6px;margin:0;white-space:nowrap;">
                 <label style="margin:0;white-space:nowrap;font-weight:600;">Reporte</label>
@@ -19821,6 +19990,7 @@ function _dibujar(){
     _bind('#btnNuevo', () => abrirModalCC(null, g('#finModal'), _tabla));
     _bind('#btnExport', _exportar);
     _bind('#btnEliminarPagados', _eliminarPagados);
+    _bind('#btnHistoricoCC', () => abrirHistoricoCC(g('#finModal'), _tabla));
     _bind('#btnColsCC', () => abrirConfigColumnas(CLAVE_PREF_CC, COLUMNAS_CC, _box.querySelector('#finModal'), () => {
         toast('Preferencia guardada. Se aplicará al volver a entrar.', 'success', 4000);
     }));
@@ -19861,6 +20031,7 @@ _bind('#btnDerivar', async () => { try {
         const nota = prompt('Nota para el área de destino (opcional):');
         if(nota === null) return;
         let n = 0, omitidos = 0;
+        const bloqueados = [];
         const usuarioDeriv = u ? u.nombre : '';
         sel.forEach(doc => {
             const valorAnterior = doc.asignadoA || 'cuentas';
@@ -19868,11 +20039,11 @@ _bind('#btnDerivar', async () => { try {
             if (r.ok) {
                 n++;
                 if (__X.cambiarEstadoCC) __X.cambiarEstadoCC(doc, 'asignadoA', doc.asignadoA, usuarioDeriv, valorAnterior);
-            } else omitidos++;
+            } else { omitidos++; if (r.bloqueado) bloqueados.push(r.error); }
         });
         CC.guardar();
         toast(n + ' documento(s) enviados a ' + areaPorId(destinoId).label +
-            (omitidos ? ' · ' + omitidos + ' ya estaban ahí' : ''), omitidos ? 'warn' : 'success', 5000);
+            (omitidos ? ' · ' + omitidos + ' no se enviaron' + (bloqueados.length ? ': ' + bloqueados[0] + (bloqueados.length > 1 ? ' (y ' + (bloqueados.length - 1) + ' más)' : '') : ' (ya estaban ahí)') : ''), omitidos ? 'warn' : 'success', 7000);
         _tabla();
     } catch (e) {
         toast('No se pudo enviar el documento: ' + (e && e.message ? e.message : e), 'error', 6000);
@@ -20126,17 +20297,22 @@ function _tabla(){
 
         const btnDel = tr.querySelector('.bDel');
         if(btnDel){
+            btnDel.title = 'Pasar a histórico';
+            btnDel.textContent = '🗄️';
             btnDel.addEventListener('click', async () => {
                 const rAC = await __X.confirmarAccionCritica({
-                    titulo: 'Eliminar documento de Cuenta Corriente',
+                    titulo: 'Pasar documento a histórico',
                     entidad: 'N° ' + (doc.factura || '') + ' · ' + (doc.rut || ''),
                     detalles: ['Monto: ' + formatCLP(doc.monto || 0)],
-                    consecuencias: ['No se puede deshacer desde esta pantalla.'],
-                    textoConfirmar: 'Eliminar documento'
+                    consecuencias: ['Sale de la cartera vigente y queda en el histórico. Se puede reactivar.'],
+                    textoConfirmar: 'Pasar a histórico'
                 });
                 if (!rAC.ok) return;
-                CC.removeAt(CC.indexOf(doc));
-                CC.guardar();
+                const u2 = getUsuarioActual();
+                if (CC.pasarAHistorico(doc, 'Pasado manualmente a histórico', u2 ? u2.nombre : '')) {
+                    CC.guardar();
+                    CC.subirHistoricoCC([doc], u2 ? u2.nombre : '');
+                }
                 _tabla();
             });
         }
@@ -20222,6 +20398,39 @@ function _clasificarTipoDocumento(docs) {
         }
         d.tipoDoc = esNC ? 'NC' : 'FC';
     });
+}
+
+function _baseDocCC(d){
+    let numero = String((d && (d.numero || d.factura)) || '').replace(/\.0+$/, '').trim().toUpperCase();
+    if (/^\d+$/.test(numero)) numero = numero.replace(/^0+(?=\d)/, '');
+    const rut = String((d && d.rut) || '').replace(/[.\-\s]/g, '').toUpperCase();
+    return numero + '|' + rut;
+}
+function _indexarImportCC(lista){
+    const m = {};
+    lista.forEach(d => { const k = _baseDocCC(d); if (k.startsWith('|') || k.endsWith('|')) return; (m[k] = m[k] || []).push(d); });
+    return m;
+}
+function _agregarIndiceImportCC(m, d){
+    const k = _baseDocCC(d);
+    if (k.startsWith('|') || k.endsWith('|')) return;
+    (m[k] = m[k] || []).push(d);
+}
+function _buscarImportCC(m, o){
+    const k = _baseDocCC(o);
+    if (k.startsWith('|') || k.endsWith('|')) return undefined;
+    const c = m[k] || [];
+    if (!c.length) return undefined;
+    return c.find(d => Math.round(Number(d.monto) || 0) === Math.round(Number(o.monto) || 0)) || c[0];
+}
+function _saldoImportCC(o){
+    if (o.saldoArchivo !== null && o.saldoArchivo !== undefined) return o.saldoArchivo;
+    return (o.monto || 0) + (o.ajuste || 0) - (o.notaCredito || 0) - (o.pagos || 0);
+}
+function _reactivarSiCorrespondeCC(ex, o, usuario){
+    if (!CC.esHistoricoCC(ex)) return 'activo';
+    if (_saldoImportCC(o) > 0) { CC.reactivarHistorico(ex, 'Reapareció con saldo pendiente en una importación', usuario); return 'reactivado'; }
+    return 'historico';
 }
 
 function _pushImport(o){
@@ -20385,23 +20594,24 @@ async function _importarExcel(){
                 if(!leidos.length){ toast('No se encontraron documentos válidos', 'warn'); return; }
                 _clasificarTipoDocumento(leidos);
 
-                const actuales = CC.docs ? CC.docs() : (CC.lista ? CC.lista() : []);
-                const indice = {};
-                actuales.forEach(d => { indice[_claveDocCC(d)] = d; });
+                const indice = _indexarImportCC(CC.docs().concat(CC.historicos()));
+                const uImp = getUsuarioActual();
+                const nUImp = uImp ? uImp.nombre : '';
 
-                let nuevos = 0, actualizados = 0, sinCambio = 0;
+                let nuevos = 0, actualizados = 0, sinCambio = 0, enHistorico = 0;
                 const _tocados = [];
                 leidos.forEach(o => {
-                    const k = _claveDocCC(o);
-                    const esClaveValida = !k.startsWith('|');
-                    const ex = esClaveValida ? indice[k] : undefined;
+                    const ex = _buscarImportCC(indice, o);
                     if(!ex){
                         const nuevo = _pushImport(o);
                         _tocados.push(nuevo);
-                        if (esClaveValida) indice[k] = nuevo;
+                        _agregarIndiceImportCC(indice, nuevo);
                         nuevos++; return;
                     }
                     let cambio = false;
+                    const estH = _reactivarSiCorrespondeCC(ex, o, nUImp);
+                    if (estH === 'historico') { enHistorico++; return; }
+                    if (estH === 'reactivado') cambio = true;
                     const set = (campo, valor) => {
                         if(valor === '' || valor === null || valor === undefined) return;
                         if(ex[campo] !== valor){ ex[campo] = valor; cambio = true; }
@@ -20447,10 +20657,10 @@ async function _importarExcel(){
                 if(avisos.sinFecha)    detalle.push(avisos.sinFecha + ' sin fecha');
                 if(avisos.textoRoto)   detalle.push(avisos.textoRoto + ' con texto ilegible');
                 if(avisos.saldoNoCoincide) detalle.push(avisos.saldoNoCoincide + ' con saldo distinto al de la columna SALDO del archivo (revisar pagos/N-C)');
-                toast(nuevos + ' nuevo(s), ' + actualizados + ' actualizado(s), ' + sinCambio + ' sin cambios', 'success', 6000);
+                toast(nuevos + ' nuevo(s), ' + actualizados + ' actualizado(s), ' + sinCambio + ' sin cambios' + (enHistorico ? ', ' + enHistorico + ' ya están en histórico' : ''), 'success', 6000);
                 if(detalle.length) toast('Aviso: ' + detalle.join(' · '), 'warn', 7000);
                 if (_box) _tabla();
-                _fin({ cantidad: nuevos + actualizados, nuevos, actualizados, sinCambio, detalle });
+                _fin({ cantidad: nuevos + actualizados, nuevos, actualizados, sinCambio, enHistorico, detalle });
             } catch(err){
                 toast('Error al leer el archivo: ' + (err && err.message ? err.message : err), 'error');
                 _fin({ error: 'Error al leer el archivo: ' + (err && err.message ? err.message : err) });
@@ -20500,21 +20710,22 @@ function _pegar(){
     });
     _clasificarTipoDocumento(_pendientes);
 
-    const actualesPegar = CC.docs ? CC.docs() : [];
-    const indicePegar = {};
-    actualesPegar.forEach(d => { indicePegar[_claveDocCC(d)] = d; });
-    let nuevosP = 0, actualizadosP = 0, saldoNoCoincideP = 0;
+    const indicePegar = _indexarImportCC(CC.docs().concat(CC.historicos()));
+    const uPeg = getUsuarioActual();
+    const nUPeg = uPeg ? uPeg.nombre : '';
+    let nuevosP = 0, actualizadosP = 0, saldoNoCoincideP = 0, enHistoricoP = 0;
     _pendientes.forEach(p => {
-        const k = _claveDocCC(p);
-        const esClaveValida = !k.startsWith('|');
-        const ex = esClaveValida ? indicePegar[k] : undefined;
+        const ex = _buscarImportCC(indicePegar, p);
         if (!ex) {
             const nuevo = _pushImport(p);
             _tocados.push(nuevo);
-            if (esClaveValida) indicePegar[k] = nuevo;
+            _agregarIndiceImportCC(indicePegar, nuevo);
             nuevosP++; return;
         }
         let cambio = false;
+        const estHP = _reactivarSiCorrespondeCC(ex, p, nUPeg);
+        if (estHP === 'historico') { enHistoricoP++; return; }
+        if (estHP === 'reactivado') cambio = true;
         const set = (campo, valor) => { if (valor !== '' && valor !== null && valor !== undefined && ex[campo] !== valor) { ex[campo] = valor; cambio = true; } };
         set('razon', p.razon); set('fechaEmision', p.fechaEmision); set('monto', p.monto);
         if (p.traeNC) set('notaCredito', p.notaCredito);
@@ -20546,7 +20757,7 @@ function _pegar(){
         _subirTocadosCC(_tocados, u2);
     }
     if (_box) _tabla();
-    toast(`${nuevosP} nuevo(s), ${actualizadosP} actualizado(s)${err ? `, ${err} con error` : ''}`, 'success');
+    toast(`${nuevosP} nuevo(s), ${actualizadosP} actualizado(s)${err ? `, ${err} con error` : ''}${enHistoricoP ? `, ${enHistoricoP} ya están en histórico` : ''}`, 'success');
     if (saldoNoCoincideP) toast(`Aviso: ${saldoNoCoincideP} con saldo distinto al pegado en la columna [saldo] (revisar pagos/N-C)`, 'warn', 7000);
     return { cantidad: nuevosP + actualizadosP, nuevos: nuevosP, actualizados: actualizadosP, conError: err };
 }
@@ -20722,55 +20933,82 @@ function _notificarFacturacion(){
 
 async function _eliminarSeleccionados(){
     const sel = _seleccionados();
-    if(!sel.length){ toast('Selecciona los documentos a eliminar', 'error'); return; }
+    if(!sel.length){ toast('Selecciona los documentos a pasar a histórico', 'error'); return; }
     const usuario = getUsuarioActual();
-    if(!usuario || usuario.rolId !== 'administrador'){ toast('Solo un administrador puede eliminar documentos', 'error'); return; }
-    const clave = prompt(`Vas a ELIMINAR ${sel.length} documento(s) de Cuentas Corrientes.\nEsta acción no se puede deshacer.\n\nConfirma con tu contraseña:`);
-    if(clave === null) return;
-    const r = await login(usuario.username, clave);
-    if(!r.ok){ toast('Contraseña incorrecta. No se eliminó nada.', 'error'); return; }
-    let n = 0;
-    const tocados = [];
-    sel.forEach(d => {
-        const i = CC.docs().findIndex(x => x.factura === d.factura && x.rut === d.rut);
-        if(i >= 0){ const doc = CC.docs()[i]; tocados.push(doc); CC.removeAt(i); n++; }
+    if(!usuario){ toast('Inicia sesión para continuar', 'error'); return; }
+    const rAC = await __X.confirmarAccionCritica({
+        titulo: 'Pasar documentos a histórico',
+        entidad: sel.length + ' documento(s) seleccionado(s)',
+        consecuencias: ['Los documentos salen de la cartera vigente pero quedan guardados en el histórico.', 'Se pueden reactivar desde el botón Histórico.'],
+        textoConfirmar: 'Pasar a histórico'
     });
+    if(!rAC.ok) return;
+    const movidos = [];
+    sel.forEach(d => { if (CC.pasarAHistorico(d, 'Pasado manualmente a histórico', usuario.nombre)) movidos.push(d); });
     CC.guardar();
-    if (__X.fusionarCamposCC) {
-        Promise.all(tocados.map(d => __X.fusionarCamposCC(d, Object.assign({}, d, { _eliminado: true }), usuario.nombre))).catch(function(){});
-    }
-    toast(`${n} documento(s) eliminado(s) por ${usuario.nombre}`, 'success');
+    CC.subirHistoricoCC(movidos, usuario.nombre);
+    toast(`${movidos.length} documento(s) pasado(s) a histórico por ${usuario.nombre}`, 'success');
     _tabla();
 }
 
 async function _eliminarPagados(){
-    const pagados = CC.docs().filter(d => (d.saldo || 0) <= 0);
-    if(!pagados.length){ toast('No hay documentos con saldo $0 para eliminar', 'warn'); return; }
+    const pagados = CC.docs().filter(d => (d.saldo || 0) <= 0 && (Number(d.monto) || 0) > 0 && d.tipoDoc !== 'NC');
+    if(!pagados.length){ toast('No hay documentos con saldo $0 para pasar a histórico', 'warn'); return; }
     const usuario = getUsuarioActual();
-    if(!usuario || usuario.rolId !== 'administrador'){ toast('Solo un administrador puede eliminar documentos', 'error'); return; }
+    if(!usuario){ toast('Inicia sesión para continuar', 'error'); return; }
     const rAC = await __X.confirmarAccionCritica({
-        titulo: 'Eliminar documentos pagados de Cuenta Corriente',
+        titulo: 'Pasar documentos pagados a histórico',
         entidad: pagados.length + ' documento(s) con saldo $0',
-        consecuencias: ['Esta acción no se puede deshacer.', 'Quedará registrada a nombre de ' + usuario.nombre + '.'],
-        textoConfirmar: 'Eliminar documentos'
+        consecuencias: ['Salen de la cartera vigente y quedan en el histórico, con toda su bitácora.', 'Se pueden reactivar desde el botón Histórico.', 'Quedará registrado a nombre de ' + usuario.nombre + '.'],
+        textoConfirmar: 'Pasar a histórico'
     });
     if(!rAC.ok) return;
-    const clave = prompt(`Confirma con tu contraseña para eliminar ${pagados.length} documento(s):`);
-    if(clave === null) return;
-    const r = await login(usuario.username, clave);
-    if(!r.ok){ toast('Contraseña incorrecta. No se eliminó nada.', 'error'); return; }
-    let n = 0;
-    const tocados = [];
-    pagados.forEach(d => {
-        const i = CC.docs().findIndex(x => x.factura === d.factura && x.rut === d.rut);
-        if(i >= 0){ const doc = CC.docs()[i]; tocados.push(doc); CC.removeAt(i); n++; }
-    });
-    CC.guardar();
-    if (__X.fusionarCamposCC) {
-        Promise.all(tocados.map(d => __X.fusionarCamposCC(d, Object.assign({}, d, { _eliminado: true }), usuario.nombre))).catch(function(){});
-    }
-    toast(`${n} documento(s) pagado(s) eliminado(s) por ${usuario.nombre}`, 'success');
+    const movidos = CC.archivarSaldoCero(usuario.nombre, 'Saldo cero (proceso manual)');
+    CC.subirHistoricoCC(movidos, usuario.nombre);
+    toast(`${movidos.length} documento(s) pagado(s) pasado(s) a histórico por ${usuario.nombre}`, 'success');
     _tabla();
+}
+
+async function abrirHistoricoCC(host, onChange){
+    const u = getUsuarioActual();
+    const pintar = (q) => {
+        const ql = String(q || '').trim().toLowerCase();
+        const lista = CC.historicos().filter(d => !ql || [d.factura, d.numero, d.rut, d.razon, d.tipoDoc, d.motivoHistorico].some(v => String(v || '').toLowerCase().includes(ql)))
+            .sort((a, b) => String(b.fechaHistorico || '').localeCompare(String(a.fechaHistorico || '')));
+        host.innerHTML = `
+        <div class="modal open"><div class="modal-panel modal-panel-xl" style="max-width:1100px;">
+            <div class="modal-header"><h3>📚 Histórico de Cuentas Corrientes (${CC.historicos().length})</h3><button class="modal-close" id="hiX">✕</button></div>
+            <div class="modal-body">
+                <div class="toolbar"><input id="hiQ" placeholder="Buscar por N°, RUT, razón social, tipo o motivo…" value="${escAttr(q || '')}" style="max-width:380px;"></div>
+                <div class="table-wrap" style="max-height:60vh;overflow:auto;"><table>
+                    <thead><tr><th>N° Doc</th><th>TD</th><th>RUT</th><th>Razón social</th><th>Emisión</th><th style="text-align:right;">Monto</th><th>Pasó a histórico</th><th>Motivo</th><th></th></tr></thead>
+                    <tbody>${lista.length ? lista.slice(0, 300).map(d => `<tr>
+                        <td><b>${escH(d.factura || d.numero || '')}</b></td><td>${escH(d.tipoDoc || '')}</td><td>${escH(d.rut || '')}</td><td>${escH(d.razon || '')}</td>
+                        <td>${escH(String(d.fechaEmision || '').slice(0, 10))}</td><td style="text-align:right;">${formatCLP(d.monto || 0)}</td>
+                        <td>${escH(String(d.fechaHistorico || '').slice(0, 10))}</td><td class="page-subtitle">${escH(d.motivoHistorico || '')}</td>
+                        <td><button class="btn-outline btn-sm hi-react" data-id="${escAttr(d.id)}">↩ Reactivar</button></td></tr>`).join('') : '<tr><td colspan="9" style="text-align:center;color:#94a3b8;padding:16px;">Sin documentos en el histórico.</td></tr>'}</tbody>
+                </table></div>
+                ${lista.length > 300 ? '<div class="page-subtitle">Mostrando 300 de ' + lista.length + '. Afina la búsqueda.</div>' : ''}
+            </div>
+            <div class="modal-footer"><button class="btn-outline btn-sm" id="hiOk">Cerrar</button></div>
+        </div></div>`;
+        host.querySelector('#hiX').addEventListener('click', () => { host.innerHTML = ''; });
+        host.querySelector('#hiOk').addEventListener('click', () => { host.innerHTML = ''; });
+        const qi = host.querySelector('#hiQ');
+        qi.addEventListener('keydown', e => { if (e.key === 'Enter') pintar(qi.value); });
+        qi.addEventListener('change', () => pintar(qi.value));
+        host.querySelectorAll('.hi-react').forEach(b => b.addEventListener('click', async () => {
+            const d = CC.historicos().find(x => x.id === b.dataset.id);
+            if (!d) return;
+            CC.reactivarHistorico(d, 'Reactivado manualmente', u ? u.nombre : '');
+            CC.guardar();
+            await CC.subirHistoricoCC([d], u ? u.nombre : '');
+            toast('Documento reactivado', 'success');
+            if (onChange) onChange();
+            pintar(qi.value);
+        }));
+    };
+    pintar('');
 }
 
 async function _enviarCobranza(lista, irACobranza){
@@ -21385,6 +21623,7 @@ async function abrirPagoMasivoCC(host, onChange) {
         const extra = sesion && sesion.id !== autorizador.id ? ' (sesión de ' + sesion.nombre + ')' : '';
         const lote = 'LOTE-' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
         const resultados = [];
+        const _locales = [];
         const h = __X.actividad ? __X.actividad.iniciar('Aplicando ' + seleccion.length + ' pago(s) en la nube…') : null;
         const TAM = 20;
         for (let i = 0; i < seleccion.length; i += TAM) {
@@ -21412,10 +21651,13 @@ async function abrirPagoMasivoCC(host, onChange) {
                     local.actualizado = r.actualizado;
                     local._pendienteSync = false;
                     CC.recalcularDocCC(local);
+                    _locales.push(local);
                 }
             });
         }
         CC.guardar();
+        const _movMasivo = _locales.filter(x => CC.archivarSiSaldoCero(x, nombreU, 'Saldo cero al aplicar pago masivo'));
+        CC.subirHistoricoCC(_movMasivo, nombreU);
         const sinSync = resultados.filter(r => !r.ok).length;
         if (h) { if (sinSync) h.error(sinSync + ' de ' + resultados.length + ' pago(s) no se aplicaron; revise el detalle.'); else h.ok(resultados.length + ' pago(s) aplicados en la nube.'); }
         if (onChange) onChange();
