@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Gestor RD Musico · v20261112-1514</title>
+<title>Gestor RD Musico · v20261112-1549</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -1063,7 +1063,11 @@ function fechaISO(fecha) {
     return isNaN(d.getTime()) ? '' : d.toISOString().split('T')[0];
 }
 
-__X.formatCLP = formatCLP; __X.formatPct = formatPct; __X.toNumber = toNumber; __X.nuevoId = nuevoId; __X.fechaISO = fechaISO; __X.parseFechaDMY = parseFechaDMY;
+__X.formatCLP = formatCLP; __X.formatPct = formatPct; __X.toNumber = toNumber; __X.nuevoId = nuevoId; function fechaCL(v) {
+    const i = fechaISO(v);
+    return i ? i.split('-').reverse().join('-') : '';
+}
+__X.fechaISO = fechaISO; __X.parseFechaDMY = parseFechaDMY; __X.fechaCL = fechaCL;
 })();
 
 (function(){
@@ -15464,6 +15468,7 @@ async function cargarEstado() {
             f.saldo = sal;
             if (d.monto != null) f.montoTotal = Number(d.monto) || f.montoTotal;
             if (d.vencimiento) f.vencimiento = d.vencimiento;
+            if (d.fechaEmision) f.fechaEmision = d.fechaEmision;
             f.diasAtraso = sal > 0 ? (d.vencimiento ? calcDiasAtraso(d.vencimiento) : (d.diasAtraso || 0)) : 0;
             if (sal <= 0) { f.interesTotal = 0; f.detalleInteres = []; }
         });
@@ -15667,7 +15672,7 @@ function abrirBitacoraFactura(f, host, onChange) {
         <div class="modal open"><div class="modal-panel">
             <div class="modal-header"><h3>📋 Bitácora — Factura ${escH(f.factura || '—')}</h3><button class="modal-close" id="bfX">✕</button></div>
             <div class="modal-body">
-                <div class="info">${escH(f.razon || f.rut || '')} — venc. ${escH(f.vencimiento || '—')}</div>
+                <div class="info">${escH(f.razon || f.rut || '')} — venc. ${escH(__X.fechaCL(f.vencimiento) || '—')}</div>
                 <div class="filter-bar" style="margin-top:10px;">
                     <div class="filter-field"><label>Fecha</label><input type="date" id="bfFecha" value="${new Date().toISOString().split('T')[0]}"></div>
                     <div class="filter-field" style="flex:1;min-width:200px;"><label>Observación</label><input id="bfTexto" placeholder="Gestión realizada..."></div>
@@ -15741,8 +15746,8 @@ const GETTERS = {
     factura: f => f.factura || '',
     rut: f => f.rut || '',
     razon: f => f.razon || '',
-    fechaEmision: f => f.fechaEmision || '',
-    vencimiento: f => f.vencimiento || '',
+    fechaEmision: f => __X.fechaCL(f.fechaEmision),
+    vencimiento: f => __X.fechaCL(f.vencimiento),
     dias: f => String(f.diasAtraso || 0),
     uf: f => String(f.uf || 0),
     monto: f => formatCLP(f.montoTotal || 0),
@@ -15940,8 +15945,8 @@ function _dibujar(box) {
             if (formato === 'excel' && __X.exportarExcel) {
                 const filas = sel.map(f => ({
                     Orden: f.orden||'', Factura: f.factura||'', RUT: f.rut||'',
-                    Razón: f.razon||'', Emisión: f.fechaEmision||'',
-                    Vencimiento: f.vencimiento||'', Días: f.diasAtraso||0,
+                    Razón: f.razon||'', Emisión: __X.fechaCL(f.fechaEmision),
+                    Vencimiento: __X.fechaCL(f.vencimiento), Días: f.diasAtraso||0,
                     'Monto IVA': f.montoTotal||0, Intereses: f.interesTotal||0
                 }));
                 __X.exportarExcel([{ nombre: titulo, filas }], nombre);
@@ -16184,7 +16189,7 @@ function _refrescar(box) {
             <td style="text-align:center"><input type="checkbox" class="fChk" ${f.seleccionado ? 'checked' : ''}></td>
             <td>${escH(f.orden || '—')}</td><td>${escH(f.factura || '—')}</td><td>${escH(f.rut || '—')}</td>
             <td>${escH(f.razon || '—')}</td>
-            <td>${escH(f.fechaEmision)}</td><td>${escH(f.vencimiento)}</td>
+            <td>${escH(__X.fechaCL(f.fechaEmision))}</td><td>${escH(__X.fechaCL(f.vencimiento))}</td>
             <td style="text-align:center"><span class="badge ${f.diasAtraso > 0 ? 'badge-red' : 'badge-green'}">${f.diasAtraso}</span></td>
             <td style="text-align:center;">${(() => { const r = __X.claseRiesgoDeDoc ? __X.claseRiesgoDeDoc({rut:f.rut}) : null; return r ? `<span class="badge" style="background:${r.color};color:#fff;">${r.clase}</span>` : '—'; })()}</td>
             <td style="text-align:right">${f.uf || 0}</td>
@@ -16788,8 +16793,8 @@ async function renderDocumentos(box) {
                 '<td>' + escH(d.orden || '\u2014') + '</td>' +
                 '<td>' + escH(d.rut || '\u2014') + '</td>' +
                 '<td>' + escH(d.razon || '\u2014') + '</td>' +
-                '<td>' + escH(d.fechaEmision || '\u2014') + '</td>' +
-                '<td>' + escH(d.vencimiento || '\u2014') + '</td>' +
+                '<td>' + escH(__X.fechaCL(d.fechaEmision) || '\u2014') + '</td>' +
+                '<td>' + escH(__X.fechaCL(d.vencimiento) || '\u2014') + '</td>' +
                 '<td style="text-align:right">' + formatCLP(d.montoTotal || d.monto || 0) + '</td>' +
                 '<td style="text-align:right">' + formatCLP(d.interesTotal || 0) + '</td>' +
                 '<td style="text-align:center"><span class="badge ' + (dias > 0 ? 'badge-red' : 'badge-green') + '">' + dias + '</span></td>' +
@@ -16887,8 +16892,8 @@ async function renderDocumentos(box) {
         orden:       d => d.orden || '',
         rut:         d => d.rut || '',
         razon:       d => d.razon || '',
-        fechaEmision:d => d.fechaEmision || '',
-        vencimiento: d => d.vencimiento || '',
+        fechaEmision:d => __X.fechaCL(d.fechaEmision),
+        vencimiento: d => __X.fechaCL(d.vencimiento),
         monto:       d => String(d.montoTotal || d.monto || 0),
         interes:     d => String(d.interesTotal || 0),
         dias:        d => String(d.diasAtraso || 0),
@@ -16906,7 +16911,7 @@ function _checklist(box) {
     cont.innerHTML = estado.facturas.map((f, idx) => `
         <label class="incumplimiento-item">
             <input type="checkbox" class="doChk" data-idx="${idx}" ${f.seleccionado ? 'checked' : ''}>
-            <div><strong>${escH(f.factura || 's/n')}</strong> — ${escH(f.razon || 'Sin razón')} — ${escH(f.rut || 'sin RUT')} — Venc: ${escH(f.vencimiento || '—')}</div>
+            <div><strong>${escH(f.factura || 's/n')}</strong> — ${escH(f.razon || 'Sin razón')} — ${escH(f.rut || 'sin RUT')} — Venc: ${escH(__X.fechaCL(f.vencimiento) || '—')}</div>
         </label>
     `).join('');
     cont.querySelectorAll('.doChk').forEach(chk => chk.addEventListener('change', () => {
@@ -17258,7 +17263,7 @@ function _dibujar(box) {
             tr.innerHTML='<td style="text-align:center"><input type="checkbox" class="descChk" data-id="'+escAttr(id)+'"'+(sel?' checked':'')+' ></td>'+
                 '<td>'+escH(dd.factura||dd.numero||'—')+'</td><td>'+escH(dd.orden||'—')+'</td>'+
                 '<td>'+escH(dd.rut||'—')+'</td><td>'+escH(dd.razon||'—')+'</td>'+
-                '<td>'+escH(dd.fechaEmision||'—')+'</td><td>'+escH(dd.vencimiento||'—')+'</td>'+
+                '<td>'+escH(__X.fechaCL(dd.fechaEmision)||'—')+'</td><td>'+escH(__X.fechaCL(dd.vencimiento)||'—')+'</td>'+
                 '<td style="text-align:right">'+formatCLP(dd.montoTotal||dd.monto||0)+'</td>'+
                 '<td style="text-align:center"><span class="badge '+(dias>0?'badge-red':'badge-green')+'">'+dias+'</span></td>'+
                 '<td style="text-align:center"><span class="badge badge-blue">Descargo</span></td>'+
@@ -18151,8 +18156,9 @@ let host=null,vista='lista',seg='todos',estado='abiertos',buscar='',orden='dias'
 let fRut='',fFact='',fEst='',fDMin='',fDMax='',fGes='',ord1='',ord2='';
 let colf=X.crearEstadoFiltros();
 const cols=[['factura','N° Doc'],['tipoDoc','TD'],['rut','RUT'],['razon','Razón social'],['fechaEmision','Emisión'],['vencimiento','Vencimiento'],['dias','Días atraso'],['monto','Monto'],['pagos','Pagos'],['saldo','Saldo'],['segmento','Segmento'],['gestion','Última gestión'],['accion','Próxima acción'],['fechaCompromiso','Plazo gestión'],['responsable','Responsable'],['estado','Estado']];
-function iso(v){if(!v)return '';if(v instanceof Date)return isNaN(v)?'':v.toISOString().slice(0,10);const s=String(v);if(/^\d{4}-\d\d-\d\d/.test(s))return s.slice(0,10);if(/^\d\d\/\d\d\/\d{4}$/.test(s)){const [d,m,y]=s.split('/');return `${y}-${m}-${d}`;}const d=new Date(s);return isNaN(d)?'':d.toISOString().slice(0,10);}
+function iso(v){if(!v)return '';if(v instanceof Date)return isNaN(v)?'':v.toISOString().slice(0,10);const s=String(v);if(/^\d{4}-\d\d-\d\d/.test(s))return s.slice(0,10);if(/^\d\d\/\d\d\/\d{4}$/.test(s)){const [d,m,y]=s.split('/');return `${y}-${m}-${d}`;}return __X.fechaISO(s)||'';}
 function hoy(){const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;}
+function cl(v){const i=iso(v);return i?i.split('-').reverse().join('-'):'';}
 function fecha(d){return iso(d.vencimiento)||(X.calcularVencimientoCC?X.calcularVencimientoCC(d.fechaEmision,d.plazoVenc||30):'');}
 function dias(d){const f=fecha(d);if(!f)return 0;return Math.max(0,Math.floor((new Date(hoy()+'T12:00:00')-new Date(f+'T12:00:00'))/86400000));}
 function historial(d){if(X.normalizarBitacora)return X.normalizarBitacora(d.bitacora);let a=d.bitacora||[];if(typeof a==='string'){try{a=JSON.parse(a)}catch(e){a=[]}}return Array.isArray(a)?a:[];}
@@ -18162,10 +18168,10 @@ function segmento(d){const p=plan(d);if(p.segmentoManual&&segmentos[p.segmentoMa
 function ult(d){const a=historial(d);return a.length?a.slice().sort((x,y)=>String(y.fecha||'').localeCompare(String(x.fecha||'')))[0]:null;}
 function valor(d,k){const p=plan(d);switch(k){case 'dias':return dias(d);case 'vencimiento':return fecha(d);case 'saldo':return saldo(d);case 'segmento':return segmentos[segmento(d)];case 'gestion':{const g=ult(d);return g?(iso(g.fecha)+' '+String(g.texto||g.descripcion||g.gestion||g.observacion||'')):'Sin gestión';}case 'accion':return p.accion||'';case 'fechaCompromiso':return iso(p.fechaCompromiso);case 'responsable':return p.responsable||'';case 'estado':return p.estado||'pendiente';default:return d[k]??'';}}
 function docs(){return (X.docs?X.docs():[]).filter(d=>d&&d._eliminado!==true&&saldo(d)>0);}
-function resumenCompartir(d){const p=plan(d);return `Documento ${d.factura||''} · ${d.razon||''} (RUT ${d.rut||''})\nVencimiento: ${fecha(d)||'-'} · Atraso: ${dias(d)} días\nSaldo pendiente: ${fmt(saldo(d))}\nPróxima acción: ${p.accion||'-'} · Responsable: ${p.responsable||'-'} · Fecha compromiso: ${iso(p.fechaCompromiso)||'-'}`;}
-function voucherHTML(d,obs){const p=plan(d);return `<h2>Voucher de gestión</h2><table><tr><td>Cliente</td><td>${H(d.razon||'')}</td></tr><tr><td>RUT</td><td>${H(d.rut||'')}</td></tr><tr><td>Documento</td><td>${H(d.factura||'')} (${H(d.tipoDoc||'')})</td></tr><tr><td>Emisión</td><td>${H(iso(d.fechaEmision))}</td></tr><tr><td>Vencimiento</td><td>${H(fecha(d)||'-')}</td></tr><tr><td>Días de atraso</td><td>${dias(d)}</td></tr><tr><td>Monto</td><td>${fmt(d.monto)}</td></tr><tr><td>Saldo pendiente</td><td>${fmt(saldo(d))}</td></tr><tr><td>Segmento</td><td>${H(segmentos[segmento(d)])}</td></tr><tr><td>Próxima acción</td><td>${H(p.accion||'-')}</td></tr><tr><td>Responsable</td><td>${H(p.responsable||'-')}</td></tr><tr><td>Fecha compromiso</td><td>${H(iso(p.fechaCompromiso)||'-')}</td></tr></table><h3>Observaciones</h3><p>${H(obs||'').replace(/\n/g,'<br>')}</p>`;}
+function resumenCompartir(d){const p=plan(d);return `Documento ${d.factura||''} · ${d.razon||''} (RUT ${d.rut||''})\nVencimiento: ${cl(fecha(d))||'-'} · Atraso: ${dias(d)} días\nSaldo pendiente: ${fmt(saldo(d))}\nPróxima acción: ${p.accion||'-'} · Responsable: ${p.responsable||'-'} · Fecha compromiso: ${cl(p.fechaCompromiso)||'-'}`;}
+function voucherHTML(d,obs){const p=plan(d);return `<h2>Voucher de gestión</h2><table><tr><td>Cliente</td><td>${H(d.razon||'')}</td></tr><tr><td>RUT</td><td>${H(d.rut||'')}</td></tr><tr><td>Documento</td><td>${H(d.factura||'')} (${H(d.tipoDoc||'')})</td></tr><tr><td>Emisión</td><td>${H(cl(d.fechaEmision))}</td></tr><tr><td>Vencimiento</td><td>${H(fecha(d)||'-')}</td></tr><tr><td>Días de atraso</td><td>${dias(d)}</td></tr><tr><td>Monto</td><td>${fmt(d.monto)}</td></tr><tr><td>Saldo pendiente</td><td>${fmt(saldo(d))}</td></tr><tr><td>Segmento</td><td>${H(segmentos[segmento(d)])}</td></tr><tr><td>Próxima acción</td><td>${H(p.accion||'-')}</td></tr><tr><td>Responsable</td><td>${H(p.responsable||'-')}</td></tr><tr><td>Fecha compromiso</td><td>${H(iso(p.fechaCompromiso)||'-')}</td></tr></table><h3>Observaciones</h3><p>${H(obs||'').replace(/\n/g,'<br>')}</p>`;}
 async function limpiarPlanes(){const objetivo=seleccion.size?docs().filter(d=>seleccion.has(String(d.id))):filtrar();const conPlan=objetivo.filter(d=>Object.keys(plan(d)).length>0);if(!conPlan.length){X.toast('No hay planes para limpiar en esta selección','info');return;}const r=await X.confirmarAccionCritica({titulo:'Limpieza general de planes',entidad:seleccion.size?'Documentos seleccionados':'Documentos visibles con los filtros actuales',detalles:[conPlan.length+' documento(s) con plan de gestión registrado'],consecuencias:['Se restablece el plan de gestión (segmento, próxima acción, responsable, fecha y estado) de cada documento.','La bitácora de gestiones de cada documento no se modifica ni se elimina.'],textoConfirmar:'Limpiar planes'});if(!r.ok)return;const usuario=X.getUsuarioActual?X.getUsuarioActual()?.nombre:'';let ok=0,fallidos=0;for(const d of conPlan){const rr=await X.fusionarCamposCC(d,{planRecuperacion:{}},usuario);if(rr&&rr.ok)ok++;else fallidos++;}X.toast(fallidos?('Planes limpiados: '+ok+', con error: '+fallidos):('Planes limpiados: '+ok),fallidos?'warn':'success');seleccion.clear();pintar();}
-const GET={factura:d=>String(d.factura??d.numero??''),tipoDoc:d=>String(d.tipoDoc||'—'),rut:d=>String(d.rut??''),razon:d=>String(d.razon??''),fechaEmision:d=>iso(d.fechaEmision),vencimiento:d=>fecha(d),dias:d=>String(dias(d)),monto:d=>fmt(d.monto),pagos:d=>fmt(d.pagos),saldo:d=>fmt(saldo(d)),segmento:d=>segmentos[segmento(d)],gestion:d=>{const g=ult(d);return g?iso(g.fecha):'Sin gestión';},accion:d=>String(plan(d).accion||''),fechaCompromiso:d=>iso(plan(d).fechaCompromiso),responsable:d=>String(plan(d).responsable||''),estado:d=>String(plan(d).estado||'pendiente')};
+const GET={factura:d=>String(d.factura??d.numero??''),tipoDoc:d=>String(d.tipoDoc||'—'),rut:d=>String(d.rut??''),razon:d=>String(d.razon??''),fechaEmision:d=>cl(d.fechaEmision),vencimiento:d=>cl(fecha(d)),dias:d=>String(dias(d)),monto:d=>fmt(d.monto),pagos:d=>fmt(d.pagos),saldo:d=>fmt(saldo(d)),segmento:d=>segmentos[segmento(d)],gestion:d=>{const g=ult(d);return g?iso(g.fecha):'Sin gestión';},accion:d=>String(plan(d).accion||''),fechaCompromiso:d=>cl(plan(d).fechaCompromiso),responsable:d=>String(plan(d).responsable||''),estado:d=>String(plan(d).estado||'pendiente')};
 function estadoDoc(d){return (X.estadoManual?X.estadoManual(d):null)||(X.calcularEstadoAuto?X.calcularEstadoAuto(d):'');}
 function cmpCrit(a,b,k){if(k==='cliente')return String(a.rut??'').localeCompare(String(b.rut??''));if(k==='fecha')return iso(a.fechaEmision).localeCompare(iso(b.fechaEmision));if(k==='vencimiento')return fecha(a).localeCompare(fecha(b));if(k==='dias')return dias(b)-dias(a);if(k==='saldo')return saldo(b)-saldo(a);if(k==='monto')return (Number(b.monto)||0)-(Number(a.monto)||0);return 0;}
 function filtrarBase(){const n=fDMin===''?0:(parseInt(fDMin)||0),m=fDMax===''?null:parseInt(fDMax);return docs().filter(d=>{const p=plan(d);if(seg!=='todos'&&segmento(d)!==seg)return false;if(estado==='abiertos'&&p.estado==='completado')return false;if(estado==='hoy'&&!(p.estado!=='completado'&&iso(p.fechaCompromiso)===hoy()))return false;if(estado==='vencidos'&&!(p.estado!=='completado'&&iso(p.fechaCompromiso)&&iso(p.fechaCompromiso)<hoy()))return false;if(fRut&&!String(d.rut??'').toLowerCase().includes(fRut.toLowerCase()))return false;if(fFact&&!GET.factura(d).toLowerCase().includes(fFact.toLowerCase()))return false;if(fEst&&estadoDoc(d)!==fEst)return false;if(n>0&&dias(d)<n)return false;if(m!==null&&!isNaN(m)&&dias(d)>m)return false;if(fGes&&!(iso(p.fechaCompromiso)&&iso(p.fechaCompromiso)<=fGes))return false;if(buscar&&!['factura','rut','razon','tipoDoc'].some(k=>String(valor(d,k)).toLowerCase().includes(buscar.toLowerCase())))return false;return true;});}
@@ -18183,10 +18189,10 @@ function pintar(){if(!host)return;const s=resumen(),a=filtrar();seleccion=new Se
 </div>
 <div id="prContenido"></div><div class="output-bar erp-acciones-pie pr-pie"><span class="erp-acciones-pie-titulo">ACCIONES Y REPORTES</span><span id="prSelCount">${seleccion.size} seleccionados</span><button class="btn-outline btn-sm" id="prLimpiarSel">🗑️ Limpiar selección</button><button class="btn-secondary btn-sm" id="prGestionSel">Gestionar seleccionado</button><button class="btn-danger btn-sm" id="prLimpiarPlanes">🧹 Limpieza general</button><button class="btn-outline btn-sm" id="prExportar">📊 Exportar CSV</button><button class="btn-outline btn-sm" id="prReporte">📄 Informe de cartera</button><button class="btn-outline btn-sm" id="prImprimir">🖨️ Imprimir</button></div></div><div id="prModal"></div>`;
 host.querySelector('#prCobranza').onclick=()=>X.router.navegar('cobranza','facturas');host.querySelectorAll('[data-kpi]').forEach(b=>b.onclick=()=>{seg='todos';estado=b.dataset.kpi==='todos'?'todos':b.dataset.kpi==='saldo'?'abiertos':b.dataset.kpi;if(_pag)_pag.reset();pintar();});host.querySelectorAll('[data-seg]').forEach(b=>b.onclick=()=>{seg=b.dataset.seg;if(_pag)_pag.reset();pintar();});[['#prRut',v=>fRut=v],['#prFact',v=>fFact=v],['#prEstDoc',v=>fEst=v],['#prDMin',v=>fDMin=v],['#prDMax',v=>fDMax=v],['#prGes',v=>fGes=v],['#prOrd1',v=>ord1=v],['#prOrd2',v=>ord2=v],['#prEstado',v=>estado=v]].forEach(([sel,set])=>{const el=host.querySelector(sel);if(!el)return;el.addEventListener('input',e=>{set(e.target.value);if(_pag)_pag.reset();contenido();});});host.querySelector('#prOrd1').value=ord1;host.querySelector('#prOrd2').value=ord2;host.querySelector('#prLimpiar').onclick=()=>{seg='todos';estado='todos';buscar='';fRut='';fFact='';fEst='';fDMin='';fDMax='';fGes='';ord1='';ord2='';colf=X.crearEstadoFiltros();if(_pag)_pag.reset();seleccion.clear();pintar();};host.querySelector('#prLista').onclick=()=>{vista='lista';contenido();};host.querySelector('#prCalendario').onclick=()=>{vista='calendario';contenido();};host.querySelector('#prExportar').onclick=()=>exportar(false);host.querySelector('#prReporte').onclick=()=>reporte(false);host.querySelector('#prImprimir').onclick=()=>reporte(true);host.querySelector('#prGestionSel').onclick=()=>{const ids=[...seleccion];if(ids.length!==1){X.toast('Seleccione un documento para gestionar','warn');return;}const d=docs().find(x=>String(x.id)===ids[0]);if(d)abrir(d);};host.querySelector('#prLimpiarSel').onclick=()=>{seleccion.clear();X.toast('Selección limpiada','info');contenido();host.querySelector('#prSelCount').textContent='0 seleccionados';};host.querySelector('#prLimpiarPlanes').onclick=()=>limpiarPlanes();contenido();}
-function tabla(a){const parte=_pag?_pag.aplicar(a):a;return `<div class="table-wrap"><table><thead><tr><th class="pr-check"><input type="checkbox" id="prCheckAll" aria-label="Seleccionar página"></th>${cols.map(([k,t])=>`<th><button class="pr-sort" data-sort="${k}" title="Ordenar por ${H(t)}">${H(t)} ${orden===k&&!ord1?(desc?'▼':'▲'):'↕'}</button>${X.icono(k)}</th>`).join('')}<th>Acciones</th></tr></thead><tbody>${parte.map(d=>{const p=plan(d),g=ult(d),id=H(String(d.id));return `<tr><td><input type="checkbox" class="pr-checkrow" data-id="${id}" ${seleccion.has(String(d.id))?'checked':''}></td><td>${H(d.factura)}</td><td>${H(d.tipoDoc||'')}</td><td>${H(d.rut)}</td><td>${H(d.razon)}</td><td>${H(iso(d.fechaEmision))}</td><td>${H(fecha(d)||'—')}</td><td class="${dias(d)>0?'pr-mora':''}">${dias(d)}</td><td class="pr-num">${fmt(d.monto)}</td><td class="pr-num">${fmt(d.pagos)}</td><td class="pr-num"><b>${fmt(saldo(d))}</b></td><td>${H(segmentos[segmento(d)])}</td><td class="pr-gestion">${g?`<small>${H(iso(g.fecha))}</small><br>${H(String(g.texto||g.descripcion||g.gestion||g.observacion||'').slice(0,120))}`:'Sin gestión'}</td><td>${H(p.accion||'—')}</td><td>${H(iso(p.fechaCompromiso)||'—')}</td><td>${H(p.responsable||'—')}</td><td>${H(p.estado||'pendiente')}</td><td class="erp-acciones-celda"><button class="btn-outline btn-sm prBit" data-id="${id}">Bitácora</button><button class="btn-primary btn-sm prGestionar" data-id="${id}">Gestionar</button></td></tr>`;}).join('')||'<tr><td colspan="18">No hay documentos con estos filtros.</td></tr>'}</tbody></table></div><div id="prPaginador"></div>`;}
-function calendario(a){const b=a.filter(d=>iso(plan(d).fechaCompromiso)).sort((x,y)=>iso(plan(x).fechaCompromiso).localeCompare(iso(plan(y).fechaCompromiso)));return `<div class="pr-calendario">${b.map(d=>{const p=plan(d);return `<div class="pr-tarea"><strong>${H(iso(p.fechaCompromiso))}</strong><b>Doc. ${H(d.factura)} · ${H(d.razon)}</b><span>Vencimiento: ${H(fecha(d))} · Atraso: ${dias(d)} días</span><span>Saldo: ${fmt(saldo(d))}</span><span>${H(p.accion||'Sin acción')} · ${H(p.responsable||'Sin asignar')}</span><button class="btn-outline btn-sm prGestionar" data-id="${H(String(d.id))}">Gestionar</button></div>`;}).join('')||'<p>No hay acciones programadas.</p>'}</div>`;}
+function tabla(a){const parte=_pag?_pag.aplicar(a):a;return `<div class="table-wrap"><table><thead><tr><th class="pr-check"><input type="checkbox" id="prCheckAll" aria-label="Seleccionar página"></th>${cols.map(([k,t])=>`<th><button class="pr-sort" data-sort="${k}" title="Ordenar por ${H(t)}">${H(t)} ${orden===k&&!ord1?(desc?'▼':'▲'):'↕'}</button>${X.icono(k)}</th>`).join('')}<th>Acciones</th></tr></thead><tbody>${parte.map(d=>{const p=plan(d),g=ult(d),id=H(String(d.id));return `<tr><td><input type="checkbox" class="pr-checkrow" data-id="${id}" ${seleccion.has(String(d.id))?'checked':''}></td><td>${H(d.factura)}</td><td>${H(d.tipoDoc||'')}</td><td>${H(d.rut)}</td><td>${H(d.razon)}</td><td>${H(cl(d.fechaEmision))}</td><td>${H(cl(fecha(d))||'—')}</td><td class="${dias(d)>0?'pr-mora':''}">${dias(d)}</td><td class="pr-num">${fmt(d.monto)}</td><td class="pr-num">${fmt(d.pagos)}</td><td class="pr-num"><b>${fmt(saldo(d))}</b></td><td>${H(segmentos[segmento(d)])}</td><td class="pr-gestion">${g?`<small>${H(cl(g.fecha))}</small><br>${H(String(g.texto||g.descripcion||g.gestion||g.observacion||'').slice(0,120))}`:'Sin gestión'}</td><td>${H(p.accion||'—')}</td><td>${H(iso(p.fechaCompromiso)||'—')}</td><td>${H(p.responsable||'—')}</td><td>${H(p.estado||'pendiente')}</td><td class="erp-acciones-celda"><button class="btn-outline btn-sm prBit" data-id="${id}">Bitácora</button><button class="btn-primary btn-sm prGestionar" data-id="${id}">Gestionar</button></td></tr>`;}).join('')||'<tr><td colspan="18">No hay documentos con estos filtros.</td></tr>'}</tbody></table></div><div id="prPaginador"></div>`;}
+function calendario(a){const b=a.filter(d=>iso(plan(d).fechaCompromiso)).sort((x,y)=>iso(plan(x).fechaCompromiso).localeCompare(iso(plan(y).fechaCompromiso)));return `<div class="pr-calendario">${b.map(d=>{const p=plan(d);return `<div class="pr-tarea"><strong>${H(cl(p.fechaCompromiso))}</strong><b>Doc. ${H(d.factura)} · ${H(d.razon)}</b><span>Vencimiento: ${H(cl(fecha(d)))} · Atraso: ${dias(d)} días</span><span>Saldo: ${fmt(saldo(d))}</span><span>${H(p.accion||'Sin acción')} · ${H(p.responsable||'Sin asignar')}</span><button class="btn-outline btn-sm prGestionar" data-id="${H(String(d.id))}">Gestionar</button></div>`;}).join('')||'<p>No hay acciones programadas.</p>'}</div>`;}
 function contenido(){const a=filtrar(),c=host.querySelector('#prContenido');if(!c)return;c.innerHTML=vista==='calendario'?calendario(a):tabla(a);if(vista!=='calendario'&&_pag){_pag.render(c.querySelector('#prPaginador'),a.length,()=>contenido());}c.querySelectorAll('[data-sort]').forEach(b=>b.onclick=()=>{ord1='';ord2='';const o1=host.querySelector('#prOrd1'),o2=host.querySelector('#prOrd2');if(o1)o1.value='';if(o2)o2.value='';if(orden===b.dataset.sort)desc=!desc;else{orden=b.dataset.sort;desc=false;}if(_pag)_pag.reset();contenido();});if(vista!=='calendario')X.engancharIconos(c,GET,()=>filtrarBase(),colf,()=>{if(_pag)_pag.reset();contenido();});c.querySelectorAll('.pr-checkrow').forEach(b=>b.onchange=()=>{b.checked?seleccion.add(b.dataset.id):seleccion.delete(b.dataset.id);host.querySelector('#prSelCount').textContent=seleccion.size+' seleccionados';});const all=c.querySelector('#prCheckAll');if(all)all.onchange=()=>{c.querySelectorAll('.pr-checkrow').forEach(b=>{b.checked=all.checked;all.checked?seleccion.add(b.dataset.id):seleccion.delete(b.dataset.id);});host.querySelector('#prSelCount').textContent=seleccion.size+' seleccionados';};c.querySelectorAll('.prGestionar').forEach(b=>b.onclick=()=>{const d=docs().find(x=>String(x.id)===b.dataset.id);if(d)abrir(d);});c.querySelectorAll('.prBit').forEach(b=>b.onclick=()=>{const d=docs().find(x=>String(x.id)===b.dataset.id);if(d)abrir(d,true);});}
-function abrir(d,soloBit=false){detalleId=String(d.id);const p=plan(d),g=historial(d).slice().sort((x,y)=>String(y.fecha||'').localeCompare(String(x.fecha||'')));const modal=host.querySelector('#prModal');modal.innerHTML=`<div class="modal open"><div class="modal-panel pr-modal"><div class="modal-header"><h3>${soloBit?'Bitácora':'Gestionar'} · ${H(d.factura)}</h3><button class="modal-close" id="prCerrar">✕</button></div><div class="modal-body"><div class="pr-ficha"><div><small>Cliente</small><b>${H(d.razon)}</b><small>${H(d.rut)}</small></div><div><small>Emisión / vencimiento</small><b>${H(iso(d.fechaEmision))} / ${H(fecha(d)||'—')}</b><small>${dias(d)} días de atraso</small></div><div><small>Monto / pagos</small><b>${fmt(d.monto)} / ${fmt(d.pagos)}</b><small>NC: ${fmt(d.notaCredito||0)}</small></div><div><small>Saldo pendiente</small><b>${fmt(saldo(d))}</b><small>${H(segmentos[segmento(d)])}</small></div></div><h3>Bitácora y antecedentes</h3><div class="pr-historial">${g.map(x=>`<div><small>${H(iso(x.fecha))} · ${H(x.usuario||'')}</small><p>${H(x.texto||x.descripcion||x.gestion||x.observacion||'')}</p></div>`).join('')||'<p>No hay gestiones registradas en la bitácora del documento.</p>'}</div><h3>Contactos</h3><div class="toolbar toolbar-una-linea"><button class="btn-outline btn-sm" id="prAddCont">➕ Agregar contacto</button></div><div id="prFormCont" style="display:none;"><div class="filter-bar"><div class="filter-field"><label>Nombre</label><input id="pcNombre"></div><div class="filter-field"><label>Cargo</label><input id="pcCargo"></div><div class="filter-field"><label>Email</label><input id="pcEmail"></div><div class="filter-field"><label>WhatsApp</label><input id="pcWa"></div><div class="filter-field" style="justify-content:flex-end;"><label style="visibility:hidden">.</label><button class="btn-success btn-sm" id="pcGuardar">Guardar</button></div></div></div><div id="prListaCont"></div>${soloBit?'':`<h3>Plan de gestión</h3><label>Segmento <select id="prSegManual"><option value="">Automático</option>${Object.entries(segmentos).map(([k,v])=>`<option value="${k}" ${p.segmentoManual===k?'selected':''}>${H(v)}</option>`).join('')}</select></label><div class="pr-checks"><label><input type="checkbox" id="prSII" ${p.alertaSII?'checked':''}> Recepción / SII por verificar</label><label><input type="checkbox" id="prPlazo" ${p.revisionPlazo?'checked':''}> Revisar plazo ejecutivo</label></div><label>Próxima acción<textarea id="prAccion" rows="2" maxlength="1500">${H(p.accion||'')}</textarea></label><div class="pr-campos"><label>Fecha compromiso<input type="date" id="prFecha" value="${H(iso(p.fechaCompromiso))}"></label><label>Responsable<input id="prResponsable" maxlength="120" value="${H(p.responsable||'')}"></label><label>Estado<select id="prEstadoGestion">${[['pendiente','Pendiente'],['en_curso','En curso'],['completado','Completado']].map(([k,v])=>`<option value="${k}" ${p.estado===k?'selected':''}>${v}</option>`).join('')}</select></label></div><label>Registrar gestión en bitácora<textarea id="prNota" rows="2" maxlength="2000"></textarea></label><h3>Voucher</h3><label>Observaciones<textarea id="prVoucherObs" rows="2" maxlength="1000"></textarea></label><button class="btn-outline btn-sm" id="prVoucher" type="button">🧾 Generar voucher</button><div id="prError" role="alert"></div>`}</div>${soloBit?'':'<div class="modal-footer"><button class="btn-primary" id="prGuardar">Guardar y sincronizar</button><button class="btn-danger btn-sm" id="prBorrarPlan" type="button">🗑️ Borrar plan</button></div>'}</div></div>`;
+function abrir(d,soloBit=false){detalleId=String(d.id);const p=plan(d),g=historial(d).slice().sort((x,y)=>String(y.fecha||'').localeCompare(String(x.fecha||'')));const modal=host.querySelector('#prModal');modal.innerHTML=`<div class="modal open"><div class="modal-panel pr-modal"><div class="modal-header"><h3>${soloBit?'Bitácora':'Gestionar'} · ${H(d.factura)}</h3><button class="modal-close" id="prCerrar">✕</button></div><div class="modal-body"><div class="pr-ficha"><div><small>Cliente</small><b>${H(d.razon)}</b><small>${H(d.rut)}</small></div><div><small>Emisión / vencimiento</small><b>${H(cl(d.fechaEmision))} / ${H(cl(fecha(d))||'—')}</b><small>${dias(d)} días de atraso</small></div><div><small>Monto / pagos</small><b>${fmt(d.monto)} / ${fmt(d.pagos)}</b><small>NC: ${fmt(d.notaCredito||0)}</small></div><div><small>Saldo pendiente</small><b>${fmt(saldo(d))}</b><small>${H(segmentos[segmento(d)])}</small></div></div><h3>Bitácora y antecedentes</h3><div class="pr-historial">${g.map(x=>`<div><small>${H(cl(x.fecha))} · ${H(x.usuario||'')}</small><p>${H(x.texto||x.descripcion||x.gestion||x.observacion||'')}</p></div>`).join('')||'<p>No hay gestiones registradas en la bitácora del documento.</p>'}</div><h3>Contactos</h3><div class="toolbar toolbar-una-linea"><button class="btn-outline btn-sm" id="prAddCont">➕ Agregar contacto</button></div><div id="prFormCont" style="display:none;"><div class="filter-bar"><div class="filter-field"><label>Nombre</label><input id="pcNombre"></div><div class="filter-field"><label>Cargo</label><input id="pcCargo"></div><div class="filter-field"><label>Email</label><input id="pcEmail"></div><div class="filter-field"><label>WhatsApp</label><input id="pcWa"></div><div class="filter-field" style="justify-content:flex-end;"><label style="visibility:hidden">.</label><button class="btn-success btn-sm" id="pcGuardar">Guardar</button></div></div></div><div id="prListaCont"></div>${soloBit?'':`<h3>Plan de gestión</h3><label>Segmento <select id="prSegManual"><option value="">Automático</option>${Object.entries(segmentos).map(([k,v])=>`<option value="${k}" ${p.segmentoManual===k?'selected':''}>${H(v)}</option>`).join('')}</select></label><div class="pr-checks"><label><input type="checkbox" id="prSII" ${p.alertaSII?'checked':''}> Recepción / SII por verificar</label><label><input type="checkbox" id="prPlazo" ${p.revisionPlazo?'checked':''}> Revisar plazo ejecutivo</label></div><label>Próxima acción<textarea id="prAccion" rows="2" maxlength="1500">${H(p.accion||'')}</textarea></label><div class="pr-campos"><label>Fecha compromiso<input type="date" id="prFecha" value="${H(iso(p.fechaCompromiso))}"></label><label>Responsable<input id="prResponsable" maxlength="120" value="${H(p.responsable||'')}"></label><label>Estado<select id="prEstadoGestion">${[['pendiente','Pendiente'],['en_curso','En curso'],['completado','Completado']].map(([k,v])=>`<option value="${k}" ${p.estado===k?'selected':''}>${v}</option>`).join('')}</select></label></div><label>Registrar gestión en bitácora<textarea id="prNota" rows="2" maxlength="2000"></textarea></label><h3>Voucher</h3><label>Observaciones<textarea id="prVoucherObs" rows="2" maxlength="1000"></textarea></label><button class="btn-outline btn-sm" id="prVoucher" type="button">🧾 Generar voucher</button><div id="prError" role="alert"></div>`}</div>${soloBit?'':'<div class="modal-footer"><button class="btn-primary" id="prGuardar">Guardar y sincronizar</button><button class="btn-danger btn-sm" id="prBorrarPlan" type="button">🗑️ Borrar plan</button></div>'}</div></div>`;
     const usuarioActual=X.getUsuarioActual?X.getUsuarioActual():null;
     modal.querySelector('#prCerrar').onclick=()=>modal.innerHTML='';
     const renderContactos=()=>{
@@ -18252,7 +18258,7 @@ function abrir(d,soloBit=false){detalleId=String(d.id);const p=plan(d),g=histori
     };
 }
 function filasExportar(){const ids=seleccion;return filtrar().filter(d=>!ids.size||ids.has(String(d.id)));}
-function datosReporte(){return filasExportar().map(d=>{const p=plan(d),g=ult(d);return [d.tipoDoc||'',d.factura,d.rut,d.razon,iso(d.fechaEmision),fecha(d),dias(d),d.monto||0,d.pagos||0,saldo(d),segmentos[segmento(d)],g?iso(g.fecha)+' '+String(g.texto||g.descripcion||g.gestion||''):'',p.accion||'',iso(p.fechaCompromiso),p.responsable||'',p.estado||'pendiente'];});}
+function datosReporte(){return filasExportar().map(d=>{const p=plan(d),g=ult(d);return [d.tipoDoc||'',d.factura,d.rut,d.razon,cl(d.fechaEmision),cl(fecha(d)),dias(d),d.monto||0,d.pagos||0,saldo(d),segmentos[segmento(d)],g?cl(g.fecha)+' '+String(g.texto||g.descripcion||g.gestion||''):'',p.accion||'',cl(p.fechaCompromiso),p.responsable||'',p.estado||'pendiente'];});}
 function exportar(){const cab=cols.map(c=>c[1]),rows=[cab,...datosReporte()],csv='\ufeff'+rows.map(r=>r.map(v=>'"'+String(v??'').replace(/"/g,'""')+'"').join(';')).join('\r\n'),blob=new Blob([csv],{type:'text/csv;charset=utf-8;'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='Plan_Recuperacion_'+hoy()+'.csv';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 function reporte(imprimir){const cab=cols.map(c=>c[1]),rows=datosReporte(),suma=rows.reduce((s,r)=>s+Number(r[9]||0),0),html=`<html><head><meta charset="utf-8"><title>Plan de recuperación</title><style>body{font:12px Arial;padding:18px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #aaa;padding:5px;text-align:left}th{background:#e8eef8}@media print{@page{size:landscape;margin:8mm}}</style></head><body><h2>Finanzas · Plan de Recuperación</h2><p>Fecha: ${hoy()} · Documentos: ${rows.length} · Saldo: ${fmt(suma)}</p><table><thead><tr>${cab.map(x=>`<th>${H(x)}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${r.map(v=>`<td>${H(v)}</td>`).join('')}</tr>`).join('')}</tbody></table></body></html>`;const w=window.open('','_blank');if(!w){X.toast('Permita las ventanas emergentes para generar el informe','warn');return;}w.document.write(html);w.document.close();if(imprimir){w.focus();w.print();}}
 async function renderPlanRecuperacion(cont){host=cont;await X.store.ready();if(!_pag)_pag=await crearPaginador('pag_planrecuperacion');await X.cargar();pintar();}
@@ -19318,7 +19324,7 @@ function aplicarNotaCredito(host, onChange){
         return Math.max(0, total - yaAplicado);
     };
     const normRut = r => String(r || '').replace(/[.\s]/g, '').toUpperCase();
-    const fechaCorta = f => String(f || '').slice(0, 10);
+    const fechaCorta = f => __X.fechaCL(f);
     const esHist = d => __X.esHistoricoCC && __X.esHistoricoCC(d);
     const ncsLibres = () => todos.filter(d => d.tipoDoc === 'NC' && !esHist(d) && !d.ncAplicada && disponibleDe(d) > 0);
     const fcsLibres = () => todos.filter(d => d.tipoDoc !== 'NC' && !esHist(d) && (d.saldo || 0) > 0);
@@ -19578,7 +19584,7 @@ function revisarDuplicadosCC(host, onChange) {
                     <div class="table-wrap"><table><thead><tr><th></th><th>Emisión</th><th>Monto</th><th>Saldo</th><th>Pagos</th><th>N/C</th><th>Estado</th><th>Bitácora</th><th>Actualizado</th></tr></thead><tbody>
                     ${g.map((d, i) => `<tr>
                         <td><button class="btn-success btn-sm rd-elegir" data-g="${gi}" data-i="${i}">Este es el correcto</button></td>
-                        <td>${escH(String(d.fechaEmision || '').slice(0, 10))}</td>
+                        <td>${escH(__X.fechaCL(d.fechaEmision))}</td>
                         <td>${formatCLP(d.monto || 0)}</td>
                         <td>${formatCLP(d.saldo || 0)}</td>
                         <td>${formatCLP(d.pagos || 0)}</td>
@@ -20132,8 +20138,8 @@ const GETTERS = {
     factura: d => d.factura || d.numero || '',
     rut: d => d.rut || '',
     razon: d => d.razon || '',
-    fechaEmision: d => __X.fechaISO(d.fechaEmision) || '',
-    vencimiento: d => __X.fechaISO(d.vencimiento) || '',
+    fechaEmision: d => __X.fechaCL(d.fechaEmision) || '',
+    vencimiento: d => __X.fechaCL(d.vencimiento) || '',
     monto: d => formatCLP(d.monto || 0),
     tipoDoc: d => d.tipoDoc || '—',
     notaCredito: d => d.notaCredito ? formatCLP(d.notaCredito) : '',
@@ -20262,8 +20268,8 @@ function _tabla(){
                 ${doc.enCobranza ? `<br><span class="badge badge-amber" title="Traspasado a Cobranza el ${escH(String(doc.fechaTraspasoCobranza || '').slice(0,10))}">⚖️ En cobranza</span>` : ''}</td>
             <td><span style="font-size:10px;">${escH(doc.rut || '')}</span></td>
             <td><span style="font-size:11px;">${escH(doc.razon || '')}</span></td>
-            <td><span style="font-size:10px;">${escH(__X.fechaISO(doc.fechaEmision) || '')}</span></td>
-            <td><span style="font-size:10px;${da > 0 ? 'color:#dc2626;font-weight:700;' : ''}">${escH(__X.fechaISO(doc.vencimiento) || '')}</span>${(doc.plazoVenc && doc.plazoVenc !== 30) ? `<br><small style="color:#94a3b8;">${doc.plazoVenc}d</small>` : ''}</td>
+            <td><span style="font-size:10px;">${escH(__X.fechaCL(doc.fechaEmision) || '')}</span></td>
+            <td><span style="font-size:10px;${da > 0 ? 'color:#dc2626;font-weight:700;' : ''}">${escH(__X.fechaCL(doc.vencimiento) || '')}</span>${(doc.plazoVenc && doc.plazoVenc !== 30) ? `<br><small style="color:#94a3b8;">${doc.plazoVenc}d</small>` : ''}</td>
             <td style="text-align:right">${formatCLP(doc.monto)}</td>
             <td style="text-align:right">${ncHtml}</td>
             <td style="text-align:right">${(doc.ajustePrecio && doc.ajustePrecio !== 0) ? `<span style="color:#d97706;">${formatCLP(doc.ajustePrecio)}</span>` : '—'}</td>
@@ -20639,7 +20645,17 @@ async function _importarExcel(){
                     }
                     let cambio = false;
                     const estH = _reactivarSiCorrespondeCC(ex, o, nUImp);
-                    if (estH === 'historico') { enHistorico++; return; }
+                    if (estH === 'historico') {
+                        enHistorico++;
+                        if (o.fechaEmision && __X.fechaISO(ex.fechaEmision) !== __X.fechaISO(o.fechaEmision)) {
+                            ex.fechaEmision = o.fechaEmision;
+                            ex.actualizado = new Date().toISOString();
+                            CC.recalcularDocCC(ex);
+                            _tocados.push(ex);
+                            actualizados++;
+                        }
+                        return;
+                    }
                     if (estH === 'reactivado') cambio = true;
                     const set = (campo, valor) => {
                         if(valor === '' || valor === null || valor === undefined) return;
@@ -20847,8 +20863,8 @@ function _reporteVencidos(){
             <td>${escH(d.factura)}${refac}</td>
             <td>${escH(d.rut)}</td>
             <td>${escH(d.razon || '')}</td>
-            <td>${escH(d.fechaEmision)}</td>
-            <td>${escH(d.vencimiento)}</td>
+            <td>${escH(__X.fechaCL(d.fechaEmision))}</td>
+            <td>${escH(__X.fechaCL(d.vencimiento))}</td>
             <td style="text-align:right">${formatCLP(d.monto)}</td>
             <td style="text-align:right">${formatCLP(d.saldo)}</td>
             <td style="text-align:center;color:#dc2626;font-weight:700;">${d.diasAtraso}</td>
@@ -20909,8 +20925,8 @@ function _generarReporte(tipo, formato){
             <td>${escH(d.factura)}</td>
             <td>${escH(d.rut)}</td>
             <td>${escH(d.razon || '')}</td>
-            <td>${escH(d.fechaEmision)}</td>
-            <td>${escH(d.vencimiento)}</td>
+            <td>${escH(__X.fechaCL(d.fechaEmision))}</td>
+            <td>${escH(__X.fechaCL(d.vencimiento))}</td>
             <td style="text-align:right">${formatCLP(d.monto)}</td>
             <td style="text-align:right">${formatCLP(d.saldo)}</td>
             <td style="text-align:center">${d.diasAtraso}</td>
@@ -21013,8 +21029,8 @@ async function abrirHistoricoCC(host, onChange){
                     <thead><tr><th>N° Doc</th><th>TD</th><th>RUT</th><th>Razón social</th><th>Emisión</th><th style="text-align:right;">Monto</th><th>Pasó a histórico</th><th>Motivo</th><th></th></tr></thead>
                     <tbody>${lista.length ? lista.slice(0, 300).map(d => `<tr>
                         <td><b>${escH(d.factura || d.numero || '')}</b></td><td>${escH(d.tipoDoc || '')}</td><td>${escH(d.rut || '')}</td><td>${escH(d.razon || '')}</td>
-                        <td>${escH(String(d.fechaEmision || '').slice(0, 10))}</td><td style="text-align:right;">${formatCLP(d.monto || 0)}</td>
-                        <td>${escH(String(d.fechaHistorico || '').slice(0, 10))}</td><td class="page-subtitle">${escH(d.motivoHistorico || '')}</td>
+                        <td>${escH(__X.fechaCL(d.fechaEmision))}</td><td style="text-align:right;">${formatCLP(d.monto || 0)}</td>
+                        <td>${escH(__X.fechaCL(d.fechaHistorico))}</td><td class="page-subtitle">${escH(d.motivoHistorico || '')}</td>
                         <td><button class="btn-outline btn-sm hi-react" data-id="${escAttr(d.id)}">↩ Reactivar</button></td></tr>`).join('') : '<tr><td colspan="9" style="text-align:center;color:#94a3b8;padding:16px;">Sin documentos en el histórico.</td></tr>'}</tbody>
                 </table></div>
                 ${lista.length > 300 ? '<div class="page-subtitle">Mostrando 300 de ' + lista.length + '. Afina la búsqueda.</div>' : ''}
@@ -21275,7 +21291,130 @@ async function _corregirFechasExcel(){
     return _prom;
 }
 
+function _detectarFechasInvertidas(docs){
+    const hoyMs = Date.now() + 86400000;
+    const base = [];
+    docs.forEach(d => {
+        if (d.tipoDoc === 'NC') return;
+        const folio = parseInt(String(d.factura || d.numero || '').replace(/[^\d]/g, ''), 10);
+        const iso = __X.fechaISO(d.fechaEmision);
+        if (!isFinite(folio) || !iso) return;
+        const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (!m) return;
+        const y = Number(m[1]), mes = Number(m[2]), dia = Number(m[3]);
+        const t = Date.UTC(y, mes - 1, dia);
+        const opciones = [{ t, iso, sw: false }];
+        if (dia <= 12 && dia !== mes) {
+            const iso2 = y + '-' + String(dia).padStart(2, '0') + '-' + String(mes).padStart(2, '0');
+            opciones.push({ t: Date.UTC(y, dia - 1, mes), iso: iso2, sw: true });
+        }
+        base.push({ d, folio, opciones });
+    });
+    base.sort((a, b) => a.folio - b.folio);
+    const n = base.length;
+    const puntaje = base.map(x => x.opciones.map(() => 0));
+    const previo = base.map(x => x.opciones.map(() => null));
+    const TOL = 3 * 86400000;
+    for (let i = 0; i < n; i++) {
+        base[i].opciones.forEach((o, k) => {
+            let mejor = 0, ref = null;
+            for (let j = 0; j < i; j++) {
+                base[j].opciones.forEach((p, q) => {
+                    if (p.t <= o.t + TOL && puntaje[j][q] > mejor) { mejor = puntaje[j][q]; ref = [j, q]; }
+                });
+            }
+            puntaje[i][k] = mejor + 1000 - (o.sw ? 1 : 0);
+            previo[i][k] = ref;
+        });
+    }
+    let fin = null, max = -1;
+    for (let i = 0; i < n; i++) base[i].opciones.forEach((o, k) => { if (puntaje[i][k] > max) { max = puntaje[i][k]; fin = [i, k]; } });
+    const elegido = {};
+    while (fin) { elegido[fin[0]] = fin[1]; fin = previo[fin[0]][fin[1]]; }
+    const res = [];
+    base.forEach((x, i) => {
+        if (x.opciones.length < 2) return;
+        const actual = x.opciones[0], inv = x.opciones[1];
+        const futuro = actual.t > hoyMs && inv.t <= hoyMs;
+        const porFolio = elegido[i] === 1;
+        if (futuro || porFolio) res.push({ doc: x.d, antes: actual.iso, despues: inv.iso, motivo: futuro ? 'La fecha actual es futura; invertida es válida' : 'No respeta el orden correlativo de folios; invertida sí' });
+    });
+    return res;
+}
+
+async function _repararFechasBase(){
+    await CC.cargar();
+    const todos = CC.docs().concat(CC.historicos());
+    const cambios = [];
+    const ya = new Set();
+    todos.forEach(d => {
+        const crudo = d.fechaEmision;
+        if (typeof crudo === 'string' && crudo && !/^\d{4}-\d{2}-\d{2}/.test(crudo.trim())) {
+            const p = __X.parseFechaDMY(crudo);
+            if (p) { cambios.push({ doc: d, antes: __X.fechaISO(crudo), despues: p, motivo: 'Formato no estándar (' + crudo + ') leído como día-mes-año', marcado: true }); ya.add(d.id); }
+        }
+    });
+    _detectarFechasInvertidas(todos).forEach(c => { if (!ya.has(c.doc.id)) cambios.push(Object.assign(c, { marcado: true })); });
+    return new Promise(resolve => {
+        const host = document.createElement('div');
+        document.body.appendChild(host);
+        const cerrar = () => { if (host.parentNode) host.parentNode.removeChild(host); };
+        const fmt = f => f ? f.split('-').reverse().join('-') : '—';
+        const pintar = () => {
+            host.innerHTML = `<div class="modal open"><div class="modal-panel modal-panel-xl" style="max-width:1050px;width:96vw;">
+                <div class="modal-header"><h3>🧹 Revisión de fechas de la base</h3><button class="modal-close" id="rfX">✕</button></div>
+                <div class="modal-body">
+                    <div class="info">Se revisaron <b>${todos.length}</b> documento(s). Posibles fechas con error: <b style="color:#b45309;">${cambios.length}</b>.</div>
+                    <div class="page-subtitle" style="margin:6px 0;">Detecta formatos mal leídos y fechas con día y mes invertidos comparando con el orden correlativo de los folios. Revisa la lista y desmarca lo que esté correcto. Para una corrección exacta usa "Corregir fechas desde archivo".</div>
+                    <div class="table-wrap" style="max-height:50vh;overflow:auto;"><table>
+                        <thead><tr><th><input type="checkbox" id="rfTodos" checked></th><th>Documento</th><th>RUT</th><th>Razón social</th><th>Emisión actual</th><th>Emisión propuesta</th><th>Motivo</th></tr></thead>
+                        <tbody>${cambios.length ? cambios.slice(0, 500).map((c, i) => `<tr><td><input type="checkbox" class="rf-chk" data-i="${i}"${c.marcado ? ' checked' : ''}></td><td><b>${escH(c.doc.factura || c.doc.numero || '')}</b></td><td>${escH(c.doc.rut || '')}</td><td>${escH(c.doc.razon || '')}</td><td>${fmt(c.antes)}</td><td style="color:#15803d;font-weight:700;">${fmt(c.despues)}</td><td class="page-subtitle">${escH(c.motivo)}</td></tr>`).join('') : '<tr><td colspan="7" style="text-align:center;padding:14px;color:#94a3b8;">No se detectaron fechas con error.</td></tr>'}</tbody>
+                    </table></div>
+                    <div id="rfMsg" style="margin-top:8px;"></div>
+                </div>
+                <div class="modal-footer"><button class="btn-success btn-sm" id="rfOk"${cambios.length ? '' : ' disabled'}>Corregir seleccionados</button><button class="btn-outline btn-sm" id="rfNo">Cerrar</button></div>
+            </div></div>`;
+            host.querySelector('#rfX').addEventListener('click', () => { cerrar(); resolve({ nuevos: 0, actualizados: 0 }); });
+            host.querySelector('#rfNo').addEventListener('click', () => { cerrar(); resolve({ nuevos: 0, actualizados: 0 }); });
+            const todosChk = host.querySelector('#rfTodos');
+            todosChk.addEventListener('change', () => { host.querySelectorAll('.rf-chk').forEach(c => { c.checked = todosChk.checked; cambios[+c.dataset.i].marcado = todosChk.checked; }); });
+            host.querySelectorAll('.rf-chk').forEach(c => c.addEventListener('change', () => { cambios[+c.dataset.i].marcado = c.checked; }));
+            host.querySelector('#rfOk').addEventListener('click', async () => {
+                const sel = cambios.filter(c => c.marcado);
+                if (!sel.length) return;
+                const btn = host.querySelector('#rfOk');
+                btn.disabled = true;
+                const u = getUsuarioActual();
+                const nombreU = u ? u.nombre : '';
+                const hoy = new Date().toISOString().slice(0, 10);
+                sel.forEach(c => {
+                    const d = c.doc;
+                    (d.bitacora = d.bitacora || []).push({ fecha: hoy, texto: 'Fecha de emisión corregida: ' + fmt(c.antes) + ' → ' + fmt(c.despues) + ' (' + c.motivo + ')' + (nombreU ? ' (usuario: ' + nombreU + ')' : '') });
+                    d.fechaEmision = c.despues;
+                    d.actualizado = new Date().toISOString();
+                    CC.recalcularDocCC(d);
+                });
+                CC.guardar();
+                const msg = host.querySelector('#rfMsg');
+                let fallos = 0;
+                if (__X.fusionarCamposCC) {
+                    for (let i = 0; i < sel.length; i += 10) {
+                        msg.innerHTML = '<div class="info">⏳ Sincronizando ' + Math.min(i + 10, sel.length) + ' de ' + sel.length + '…</div>';
+                        const rs = await Promise.all(sel.slice(i, i + 10).map(c => __X.fusionarCamposCC(c.doc, c.doc, nombreU).catch(() => ({ ok: false }))));
+                        rs.forEach(r => { if (!r || r.ok === false || r.offline) fallos++; });
+                    }
+                }
+                toast(sel.length + ' fecha(s) corregida(s)' + (fallos ? ' — ' + fallos + ' quedaron solo en este equipo y se enviarán al sincronizar' : ''), fallos ? 'warn' : 'success', 7000);
+                cerrar();
+                resolve({ nuevos: 0, actualizados: sel.length });
+            });
+        };
+        pintar();
+    });
+}
+
 __X.importarCC_Excel = _importarExcel;
+__X.repararFechasCC = _repararFechasBase;
 __X.corregirFechasCC_Excel = _corregirFechasExcel;
 __X.importarCC_Pegar = _pegar;
 __X._claveDocCC = _claveDocCC;
@@ -28751,6 +28890,7 @@ function _renderImportaciones(box) {
         <div class="toolbar">
             <button class="btn-success btn-sm" id="impCCExcel">📂 Importar Excel</button>
             <button class="btn-outline btn-sm" id="impCCPegar">📋 Pegar filas</button>
+            <button class="btn-secondary btn-sm" id="impCCRevisar" title="Revisa toda la base sin archivo: formatos mal leídos y día/mes invertidos">🧹 Revisar y corregir fechas de la base</button>
             <button class="btn-secondary btn-sm" id="impCCFechas" title="Carga el mismo archivo y corrige emisión y vencimiento de los documentos ya cargados">📅 Corregir fechas desde archivo</button>
         </div>
     </div>
@@ -28795,6 +28935,12 @@ function _renderImportaciones(box) {
         if (!__X.importarCC_Excel) return;
         if (z) z.innerHTML = '<div class="info">⏳ Cuentas Corrientes: selecciona el archivo; al cargarlo se informará el resultado y los errores.</div>';
         try { _resCC(z, await __X.importarCC_Excel(), 'Importación cancelada: no se eligió archivo.'); }
+        catch (e) { if (z) z.innerHTML = '<div class="warn">❌ Error: ' + escH(e.message || String(e)) + '</div>'; }
+    });
+    btn('#impCCRevisar')?.addEventListener('click', async () => {
+        const z = box.querySelector('#impEstadoGlobal');
+        if (!__X.repararFechasCC) return;
+        try { await __X.repararFechasCC(); if (z) z.innerHTML = ''; }
         catch (e) { if (z) z.innerHTML = '<div class="warn">❌ Error: ' + escH(e.message || String(e)) + '</div>'; }
     });
     btn('#impCCFechas')?.addEventListener('click', async () => {
