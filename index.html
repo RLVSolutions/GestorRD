@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Gestor RD Musico · v20261106-1646</title>
+<title>Gestor RD Musico · v20261112-1514</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -1024,6 +1024,31 @@ function nuevoId(prefijo) {
         + '-' + _seqId.toString(36)
         + Math.random().toString(36).slice(2, 6);
 }
+function parseFechaDMY(val) {
+    if (val === null || val === undefined || val === '') return '';
+    const ok = (y, m, d) => {
+        y = Number(y); m = Number(m); d = Number(d);
+        if (!(y >= 1900 && y <= 2100 && m >= 1 && m <= 12 && d >= 1 && d <= 31)) return '';
+        const t = new Date(Date.UTC(y, m - 1, d));
+        if (t.getUTCMonth() !== m - 1) return '';
+        return t.toISOString().slice(0, 10);
+    };
+    const serial = n => {
+        if (!(n > 20000 && n < 80000)) return '';
+        const t = new Date(Date.UTC(1899, 11, 30));
+        t.setUTCDate(t.getUTCDate() + Math.floor(n));
+        return t.toISOString().slice(0, 10);
+    };
+    if (val instanceof Date) return isNaN(val.getTime()) ? '' : val.toISOString().slice(0, 10);
+    if (typeof val === 'number') return serial(val);
+    const s = String(val).trim();
+    let m = s.match(/^(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})(?:[T\s].*)?$/);
+    if (m) return ok(m[1], m[2], m[3]);
+    m = s.match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{2}|\d{4})(?:[T\s].*)?$/);
+    if (m) return ok(m[3].length === 2 ? 2000 + Number(m[3]) : m[3], m[2], m[1]);
+    if (/^\d{5}(\.\d+)?$/.test(s)) return serial(parseFloat(s));
+    return '';
+}
 function fechaISO(fecha) {
     if (!fecha) return '';
     if (fecha instanceof Date) {
@@ -1032,11 +1057,13 @@ function fechaISO(fecha) {
     const s = String(fecha);
     const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
     if (m) return m[1];
+    const dmy = parseFechaDMY(s);
+    if (dmy) return dmy;
     const d = new Date(s);
     return isNaN(d.getTime()) ? '' : d.toISOString().split('T')[0];
 }
 
-__X.formatCLP = formatCLP; __X.formatPct = formatPct; __X.toNumber = toNumber; __X.nuevoId = nuevoId; __X.fechaISO = fechaISO;
+__X.formatCLP = formatCLP; __X.formatPct = formatPct; __X.toNumber = toNumber; __X.nuevoId = nuevoId; __X.fechaISO = fechaISO; __X.parseFechaDMY = parseFechaDMY;
 })();
 
 (function(){
@@ -1232,29 +1259,22 @@ function parseFechaFlexible(fechaStr) {
     if (match) return `${match[3]}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`;
     match = limpio.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
     if (match) return `${match[3]}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`;
+    const dmy2 = __X.parseFechaDMY(limpio);
+    if (dmy2) return dmy2;
     let d = new Date(limpio);
     if (!isNaN(d.getTime())) return d.toISOString().split('T')[0];
     return null;
 }
 function parseFechaCC(val) {
-    if (!val) return '';
-    const s = String(val).trim();
-    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-    if (/^\d{2}\/\d{2}\/\d{4}$/.test(s)) { const [d, m, y] = s.split('/'); return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`; }
-    if (/^\d{2}-\d{2}-\d{4}$/.test(s)) { const [d, m, y] = s.split('-'); return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`; }
-    const n = parseFloat(s);
-    if (!isNaN(n) && n > 40000 && n < 60000) {
-        const d = new Date(Date.UTC(1899, 11, 30)); d.setUTCDate(d.getUTCDate() + Math.floor(n));
-        return d.toISOString().split('T')[0];
-    }
-    return s;
+    if (!val && val !== 0) return '';
+    const r = __X.parseFechaDMY(val);
+    return r || String(val).trim();
 }
 function parseFechaEstricta(val) {
     if (!val) return null;
     let s = String(val).trim();
     if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-    if (/^\d{2}\/\d{2}\/\d{4}$/.test(s)) { const [d, m, y] = s.split('/'); return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`; }
-    return null;
+    return __X.parseFechaDMY(s) || null;
 }
 function mesTextoANumero(mes) {
     const meses = { 'ENERO': 1, 'FEBRERO': 2, 'MARZO': 3, 'ABRIL': 4, 'MAYO': 5, 'JUNIO': 6, 'JULIO': 7, 'AGOSTO': 8, 'SEPTIEMBRE': 9, 'OCTUBRE': 10, 'NOVIEMBRE': 11, 'DICIEMBRE': 12 };
@@ -18556,6 +18576,8 @@ function _fechaISO_CC(fecha){
     const s = String(fecha);
     const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
     if (m) return m[1];
+    const dmy = __X.parseFechaDMY ? __X.parseFechaDMY(s) : '';
+    if (dmy) return dmy;
     const d = new Date(s);
     return isNaN(d.getTime()) ? '' : d.toISOString().split('T')[0];
 }
@@ -20510,6 +20532,13 @@ async function _importarExcel(){
                 const ws = wb.Sheets['CTA CTE'] || wb.Sheets['CTACTE'] || wb.Sheets[wb.SheetNames[0]];
                 if(!ws){ toast('No se encontró la hoja CTA CTE', 'error'); _fin({ error: 'No se encontró la hoja CTA CTE' }); return; }
                 const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' });
+                const rangoWs = ws['!ref'] ? XLSX.utils.decode_range(ws['!ref']) : { s: { r: 0, c: 0 } };
+                const valFecha = (i, c) => {
+                    const celda = ws[XLSX.utils.encode_cell({ r: rangoWs.s.r + i, c: rangoWs.s.c + c })];
+                    if (celda && celda.t === 'n' && typeof celda.v === 'number') return celda.v;
+                    if (celda && celda.t === 'd' && celda.v instanceof Date) return celda.v;
+                    return (rows[i] || [])[c];
+                };
 
                 let hr = -1;
                 for(let i = 0; i < Math.min(10, rows.length); i++){
@@ -20564,7 +20593,7 @@ async function _importarExcel(){
                     else if(nomFila){ nomAct = nomFila; }
                     if(!rutAct){ avisos.sinCliente++; continue; }
 
-                    const fEmision = cFec >= 0 ? parseFechaCC(row[cFec]) : '';
+                    const fEmision = cFec >= 0 ? parseFechaCC(valFecha(i, cFec)) : '';
                     if(!fEmision) avisos.sinFecha++;
 
                     let bitTxt = cCob >= 0 ? limpio(row[cCob]) : '';
@@ -20584,7 +20613,7 @@ async function _importarExcel(){
                         tipoDoc: cTD >= 0 ? limpio(row[cTD]).toUpperCase() : '',
                         bitacora: bitTxt ? CC.parsearBitacoraCC(bitTxt) : [],
                         diasAtraso: cDia >= 0 ? num(row[cDia]) : 0,
-                        proxGestion: cGes >= 0 ? parseFechaCC(row[cGes]) : '',
+                        proxGestion: cGes >= 0 ? parseFechaCC(valFecha(i, cGes)) : '',
                         interno: cInt >= 0 && ['X','SI','S','1'].includes(limpio(row[cInt]).toUpperCase()),
                         reclamoMP: cPla >= 0 ? limpio(row[cPla]).replace(/^=.*/,'') : '',
                         reclamoCGR: cCgr >= 0 ? limpio(row[cCgr]) : ''
@@ -21112,7 +21141,142 @@ function _agregar(box){
 }
 
 __X.renderFinanzas = renderFinanzas;
+async function _corregirFechasExcel(){
+    if (typeof XLSX === 'undefined') { toast('La librería de Excel no cargó', 'error'); throw new Error('La librería de Excel no cargó (¿sin conexión?)'); }
+    let _fin; const _prom = new Promise(r => { _fin = r; });
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.xlsx,.xls,.xlsm';
+    input.onchange = e => {
+        const file = e.target.files[0];
+        if (!file) { _fin(null); return; }
+        const reader = new FileReader();
+        reader.onload = async ev => {
+            try {
+                await CC.cargar();
+                const wb = XLSX.read(new Uint8Array(ev.target.result), { type: 'array', cellDates: false });
+                const ws = wb.Sheets['CTA CTE'] || wb.Sheets['CTACTE'] || wb.Sheets[wb.SheetNames[0]];
+                if (!ws) { toast('No se encontró la hoja con documentos', 'error'); _fin({ error: 'No se encontró la hoja con documentos' }); return; }
+                const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' });
+                const rango = ws['!ref'] ? XLSX.utils.decode_range(ws['!ref']) : { s: { r: 0, c: 0 } };
+                const valor = (i, c) => {
+                    const celda = ws[XLSX.utils.encode_cell({ r: rango.s.r + i, c: rango.s.c + c })];
+                    if (celda && celda.t === 'n' && typeof celda.v === 'number') return celda.v;
+                    return (rows[i] || [])[c];
+                };
+                let hr = -1;
+                for (let i = 0; i < Math.min(10, rows.length); i++) {
+                    const fila = (rows[i] || []).map(x => String(x || '').trim().toUpperCase());
+                    if (fila.some(c => ['NUMERO', 'N°', 'NUM', 'FACTURA'].includes(c))) { hr = i; break; }
+                }
+                if (hr < 0) { toast('No se encontró la cabecera (columna NUMERO/FACTURA)', 'error'); _fin({ error: 'No se encontró la cabecera (columna NUMERO/FACTURA)' }); return; }
+                const cab = (rows[hr] || []).map(x => String(x || '').trim().toUpperCase());
+                const col = (...alias) => {
+                    for (const a of alias) {
+                        const k = cab.findIndex(c => c === a || c.replace(/\s+/g, '') === a.replace(/\s+/g, ''));
+                        if (k >= 0) return k;
+                    }
+                    return -1;
+                };
+                const cNum = col('NUMERO', 'N°', 'NUM', 'FACTURA');
+                const cRut = col('RUT');
+                const cFec = col('FECHA', 'FECHA EMISION', 'EMISION', 'FECHAEMISION');
+                const cVen = col('VENCIMIENTO', 'FECHA VENCIMIENTO', 'VENC', 'FECHA VENC');
+                if (cFec < 0) { toast('La hoja no tiene columna FECHA', 'error'); _fin({ error: 'La hoja no tiene columna FECHA' }); return; }
+                const indice = _indexarImportCC(CC.docs().concat(CC.historicos()));
+                const limpio = x => String(x == null ? '' : x).trim();
+                let rutAct = '', leidas = 0, sinFecha = 0, sinDoc = 0, iguales = 0;
+                const cambios = [];
+                const vistos = new Set();
+                for (let i = hr + 1; i < rows.length; i++) {
+                    const row = rows[i] || [];
+                    const numero = limpio(row[cNum]).replace(/\.0+$/, '');
+                    if (!numero || /^(TOTAL|SALDO|SUMA)/i.test(numero)) continue;
+                    const rutFila = cRut >= 0 ? limpio(row[cRut]) : '';
+                    if (rutFila) rutAct = rutFila;
+                    if (!rutAct) continue;
+                    leidas++;
+                    const em = __X.parseFechaDMY(valor(i, cFec));
+                    if (!em) { sinFecha++; continue; }
+                    const ve = cVen >= 0 ? __X.parseFechaDMY(valor(i, cVen)) : '';
+                    const k = _baseDocCC({ numero, rut: rutAct });
+                    const docsK = indice[k];
+                    if (!docsK || !docsK.length) { sinDoc++; continue; }
+                    docsK.forEach(d => {
+                        if (vistos.has(d.id)) return;
+                        vistos.add(d.id);
+                        const plazo = ve ? Math.max(0, Math.round((new Date(ve + 'T12:00:00') - new Date(em + 'T12:00:00')) / 86400000)) : (parseInt(d.plazoVenc) || 30);
+                        const venNuevo = CC.calcularVencimientoCC(em, plazo);
+                        const emActual = __X.fechaISO(d.fechaEmision);
+                        const venActual = __X.fechaISO(d.vencimiento);
+                        if (emActual === em && venActual === venNuevo) { iguales++; return; }
+                        cambios.push({ doc: d, em, plazo, venNuevo, emActual, venActual });
+                    });
+                }
+                const host = document.createElement('div');
+                document.body.appendChild(host);
+                const cerrar = () => { if (host.parentNode) host.parentNode.removeChild(host); };
+                const fmt = f => f ? f.split('-').reverse().join('-') : '—';
+                host.innerHTML = `<div class="modal open"><div class="modal-panel modal-panel-xl" style="max-width:1000px;width:96vw;">
+                    <div class="modal-header"><h3>📅 Corregir fechas desde archivo</h3><button class="modal-close" id="cfX">✕</button></div>
+                    <div class="modal-body">
+                        <div class="info" style="display:flex;flex-wrap:wrap;gap:16px;">
+                            <span>Filas leídas: <b>${leidas}</b></span><span>A corregir: <b style="color:#b45309;">${cambios.length}</b></span><span>Ya correctas: <b>${iguales}</b></span><span>Sin documento en la app: <b>${sinDoc}</b></span><span>Sin fecha legible: <b>${sinFecha}</b></span>
+                        </div>
+                        <div class="page-subtitle" style="margin:6px 0;">Las fechas del archivo se leen como día-mes-año. El vencimiento se recalcula con el plazo de cada documento${cVen >= 0 ? ' (o con la columna de vencimiento del archivo)' : ''}.</div>
+                        <div class="table-wrap" style="max-height:50vh;overflow:auto;"><table>
+                            <thead><tr><th>Documento</th><th>RUT</th><th>Emisión actual</th><th>Emisión correcta</th><th>Vencimiento actual</th><th>Vencimiento correcto</th></tr></thead>
+                            <tbody>${cambios.length ? cambios.slice(0, 300).map(c => `<tr><td><b>${escH(c.doc.factura || c.doc.numero || '')}</b></td><td>${escH(c.doc.rut || '')}</td><td>${fmt(c.emActual)}</td><td style="color:#15803d;font-weight:700;">${fmt(c.em)}</td><td>${fmt(c.venActual)}</td><td style="color:#15803d;font-weight:700;">${fmt(c.venNuevo)}</td></tr>`).join('') : '<tr><td colspan="6" style="text-align:center;padding:14px;color:#94a3b8;">No hay fechas por corregir.</td></tr>'}</tbody>
+                        </table></div>
+                        ${cambios.length > 300 ? '<div class="page-subtitle">Mostrando 300 de ' + cambios.length + '; se corregirán todas.</div>' : ''}
+                        <div id="cfMsg" style="margin-top:8px;"></div>
+                    </div>
+                    <div class="modal-footer"><button class="btn-success btn-sm" id="cfOk"${cambios.length ? '' : ' disabled'}>Corregir ${cambios.length} documento(s)</button><button class="btn-outline btn-sm" id="cfNo">Cancelar</button></div>
+                </div></div>`;
+                host.querySelector('#cfX').addEventListener('click', () => { cerrar(); _fin({ nuevos: 0, actualizados: 0, sinCambio: iguales }); });
+                host.querySelector('#cfNo').addEventListener('click', () => { cerrar(); _fin({ nuevos: 0, actualizados: 0, sinCambio: iguales }); });
+                host.querySelector('#cfOk').addEventListener('click', async () => {
+                    const btn = host.querySelector('#cfOk');
+                    btn.disabled = true;
+                    const u = getUsuarioActual();
+                    const nombreU = u ? u.nombre : '';
+                    const hoy = new Date().toISOString().slice(0, 10);
+                    cambios.forEach(c => {
+                        const d = c.doc;
+                        (d.bitacora = d.bitacora || []).push({ fecha: hoy, texto: 'Fechas corregidas desde archivo: emisión ' + fmt(c.emActual) + ' → ' + fmt(c.em) + ', vencimiento ' + fmt(c.venActual) + ' → ' + fmt(c.venNuevo) + (nombreU ? ' (usuario: ' + nombreU + ')' : '') });
+                        d.fechaEmision = c.em;
+                        d.plazoVenc = c.plazo;
+                        d.actualizado = new Date().toISOString();
+                        CC.recalcularDocCC(d);
+                    });
+                    CC.guardar();
+                    const msg = host.querySelector('#cfMsg');
+                    let fallos = 0;
+                    if (__X.fusionarCamposCC) {
+                        for (let i = 0; i < cambios.length; i += 10) {
+                            const lote = cambios.slice(i, i + 10);
+                            msg.innerHTML = '<div class="info">⏳ Sincronizando ' + Math.min(i + 10, cambios.length) + ' de ' + cambios.length + '…</div>';
+                            const rs = await Promise.all(lote.map(c => __X.fusionarCamposCC(c.doc, c.doc, nombreU).catch(() => ({ ok: false }))));
+                            rs.forEach(r => { if (!r || r.ok === false || r.offline) fallos++; });
+                        }
+                    }
+                    toast(cambios.length + ' documento(s) con fechas corregidas' + (fallos ? ' — ' + fallos + ' quedaron solo en este equipo y se enviarán al sincronizar' : ''), fallos ? 'warn' : 'success', 7000);
+                    cerrar();
+                    _fin({ nuevos: 0, actualizados: cambios.length, sinCambio: iguales });
+                });
+            } catch (err) {
+                toast('No se pudo leer el archivo: ' + ((err && err.message) || err), 'error');
+                _fin({ error: (err && err.message) || String(err) });
+            }
+        };
+        reader.readAsArrayBuffer(file);
+    };
+    input.click();
+    return _prom;
+}
+
 __X.importarCC_Excel = _importarExcel;
+__X.corregirFechasCC_Excel = _corregirFechasExcel;
 __X.importarCC_Pegar = _pegar;
 __X._claveDocCC = _claveDocCC;
 })();
@@ -28587,6 +28751,7 @@ function _renderImportaciones(box) {
         <div class="toolbar">
             <button class="btn-success btn-sm" id="impCCExcel">📂 Importar Excel</button>
             <button class="btn-outline btn-sm" id="impCCPegar">📋 Pegar filas</button>
+            <button class="btn-secondary btn-sm" id="impCCFechas" title="Carga el mismo archivo y corrige emisión y vencimiento de los documentos ya cargados">📅 Corregir fechas desde archivo</button>
         </div>
     </div>
     <div class="section">
@@ -28631,6 +28796,18 @@ function _renderImportaciones(box) {
         if (z) z.innerHTML = '<div class="info">⏳ Cuentas Corrientes: selecciona el archivo; al cargarlo se informará el resultado y los errores.</div>';
         try { _resCC(z, await __X.importarCC_Excel(), 'Importación cancelada: no se eligió archivo.'); }
         catch (e) { if (z) z.innerHTML = '<div class="warn">❌ Error: ' + escH(e.message || String(e)) + '</div>'; }
+    });
+    btn('#impCCFechas')?.addEventListener('click', async () => {
+        const z = box.querySelector('#impEstadoGlobal');
+        if (!__X.corregirFechasCC_Excel) return;
+        if (z) z.innerHTML = '<div class="info">⏳ Selecciona el archivo con las facturas; verás un resumen antes de aplicar.</div>';
+        try {
+            const r = await __X.corregirFechasCC_Excel();
+            if (!z) return;
+            if (!r) z.innerHTML = '<div class="info">Corrección cancelada: no se eligió archivo.</div>';
+            else if (r.error) z.innerHTML = '<div class="warn">❌ ' + escH(r.error) + '</div>';
+            else z.innerHTML = '<div class="card card-green">✅ Fechas corregidas en ' + (r.actualizados || 0) + ' documento(s); ' + (r.sinCambio || 0) + ' ya estaban correctos.</div>';
+        } catch (e) { if (z) z.innerHTML = '<div class="warn">❌ Error: ' + escH(e.message || String(e)) + '</div>'; }
     });
     btn('#impCCPegar')?.addEventListener('click', async () => {
         const z = box.querySelector('#impEstadoGlobal');
