@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Gestor RD Musico · v20261119-0048</title>
+<title>Gestor RD Musico · v20261119-0351</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -20648,6 +20648,20 @@ function _clasificarTipoDocumento(docs) {
     });
 }
 
+function _hojaCtaCteCC(wb){
+    const norm = n => String(n || '').replace(/\s+/g, '').toUpperCase();
+    const filasConFolio = ws => {
+        if (!ws || !ws['!ref']) return 0;
+        const f = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' });
+        return f.filter(r => r.some(c => /^\d{3,}$/.test(String(c).trim().replace(/\.0+$/, '')))).length;
+    };
+    const cand = wb.SheetNames.filter(n => norm(n) === 'CTACTE');
+    if (!cand.length) return wb.Sheets[wb.SheetNames[0]];
+    let mejor = cand[0], max = -1;
+    cand.forEach(n => { const k = filasConFolio(wb.Sheets[n]) + (/TIPO/.test(norm(((XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: '' })[0]) || []).join(' '))) ? 0.5 : 0); if (k > max) { max = k; mejor = n; } });
+    return wb.Sheets[mejor];
+}
+
 function _baseDocCC(d){
     let numero = String((d && (d.numero || d.factura)) || '').replace(/\.0+$/, '').trim().toUpperCase();
     if (/^\d+$/.test(numero)) numero = numero.replace(/^0+(?=\d)/, '');
@@ -20765,7 +20779,7 @@ async function _importarExcel(){
             try {
                 await CC.cargar();
                 const wb = XLSX.read(new Uint8Array(ev.target.result), { type: 'array', cellDates: false });
-                const ws = wb.Sheets['CTA CTE'] || wb.Sheets['CTACTE'] || wb.Sheets[wb.SheetNames[0]];
+                const ws = _hojaCtaCteCC(wb);
                 if(!ws){ toast('No se encontró la hoja CTA CTE', 'error'); _fin({ error: 'No se encontró la hoja CTA CTE' }); return; }
                 const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' });
                 const rangoWs = ws['!ref'] ? XLSX.utils.decode_range(ws['!ref']) : { s: { r: 0, c: 0 } };
@@ -20821,7 +20835,9 @@ async function _importarExcel(){
                     const rutFila = cRut >= 0 ? limpio(row[cRut]) : '';
                     const nomFila = cNom >= 0 ? limpio(row[cNom]) : '';
 
-                    if(!numero || /^(TOTAL|SALDO|SUMA)/i.test(numero)){
+                    const tdFila = cTD >= 0 ? limpio(row[cTD]) : '';
+                    const rutInvalido = rutFila && !/^[\dkK.\-]{7,12}$/.test(rutFila);
+                    if(!numero || !/\d/.test(numero) || rutInvalido || /^(TOTAL|SALDO|SUMA|INICIAL|FINAL)/i.test(numero) || /^(TOTAL|SALDO|SUMA|INICIAL|FINAL)/i.test(tdFila)){
                         if(row.some(x => limpio(x))) avisos.totales++;
                         continue;
                     }
@@ -20835,8 +20851,9 @@ async function _importarExcel(){
                     let bitTxt = cCob >= 0 ? limpio(row[cCob]) : '';
                     if(bitTxt && !textoOk(bitTxt)){ avisos.textoRoto++; bitTxt = ''; }
 
-                    const monto = cMon >= 0 ? num(row[cMon]) : 0;
-                    const nc    = cNcr >= 0 ? num(row[cNcr]) : 0;
+                    let monto = cMon >= 0 ? num(row[cMon]) : 0;
+                    let nc    = cNcr >= 0 ? num(row[cNcr]) : 0;
+                    if (monto < 0 && nc === 0) { nc = -monto; monto = 0; }
                     const pagos = cPag >= 0 ? num(row[cPag]) : 0;
                     const saldoArchivo = cSal >= 0 ? num(row[cSal]) : null;
 
@@ -21392,7 +21409,7 @@ async function _corregirFechasExcel(){
             try {
                 await CC.cargar();
                 const wb = XLSX.read(new Uint8Array(ev.target.result), { type: 'array', cellDates: false });
-                const ws = wb.Sheets['CTA CTE'] || wb.Sheets['CTACTE'] || wb.Sheets[wb.SheetNames[0]];
+                const ws = _hojaCtaCteCC(wb);
                 if (!ws) { toast('No se encontró la hoja con documentos', 'error'); _fin({ error: 'No se encontró la hoja con documentos' }); return; }
                 const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' });
                 const rango = ws['!ref'] ? XLSX.utils.decode_range(ws['!ref']) : { s: { r: 0, c: 0 } };
