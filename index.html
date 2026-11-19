@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Gestor RD Musico · v20261112-2038</title>
+<title>Gestor RD Musico · v20261119-0048</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -14982,34 +14982,46 @@ __X.totalesCobranza = totalesCobranza; __X.tablaDatosTextoCobranza = tablaDatosT
 
 (function(){
 const INCUMPLIMIENTOS = [
-    { id: "noReclamacion", texto: "No reclamación en plazo legal (8 días corridos)", base: "Arts. 3 y 5 Ley 19.983 → factura título ejecutivo. Dictámenes CGR N° 52.665/2016, N° 25.148/2019, E207.521/2021, E325.362/2023." },
-    { id: "bloqueoFacturacion", texto: "Bloqueo arbitrario de facturación", base: "Dictamen CGR N° 31.234/2018 (recepción conforme independiente)" },
+    { id: "noReclamacion", texto: "Factura no reclamada: aceptación irrevocable y recepción conforme", base: "Arts. 3 y 5 Ley 19.983. Dictámenes CGR N° 52.665/2016, N° 25.148/2019, E207.521/2021, E325.362/2023." },
+    { id: "pagoFueraPlazo", texto: "Mora: pago fuera del plazo de 30 días", base: "Arts. 2° bis, 2° ter y 2° quáter Ley 19.983; art. 133 D.S. N° 661/2024; Directiva N° 23/2026. Dictámenes N° 7.561/2018, E327515/2023, E226682/2022." },
+    { id: "bloqueoFacturacion", texto: "Bloqueo u obstaculización arbitraria de la facturación o del pago", base: "Dictámenes CGR N° 31.234/2018 y E26274/2025. Principio de transparencia." },
     { id: "multaIlegal", texto: "Aplicación indebida de multa", base: "Ley 19.886 (bases deben publicar multas). Dictamen E26274/2025." },
-    { id: "pagoFueraPlazo", texto: "Pago fuera de plazo (mora)", base: "Art. 2° bis Ley 19.983 (Ley 21.131) → intereses desde día 31. Dictámenes CGR N° 7.561/2018, E327515/2023, E226682/2022." },
-    { id: "faltaProbidad", texto: "Falta a la probidad administrativa", base: "Art. 13 Ley 18.575. Dictámenes N° 85.700/2016, N° 23.518/2019, E14.498/2021, E61.245/2022." },
-    { id: "faltaDeberFuncionario", texto: "Falta al deber funcionario", base: "Art. 2° quinquies Ley 19.983 (sumario administrativo; la CGR puede incoarlo). Ley 18.834. Dictamen N° 10.292/2020." },
+    { id: "reclamoPagoSinRespuesta", texto: "Reclamo de pago sin respuesta (Gestor de Reclamos ChileCompra)", base: "Directiva N° 23/2026 (respuesta en 5 días hábiles); art. 133 D.S. N° 661/2024." },
+    { id: "responsabilidadAdministrativa", texto: "Falta a la probidad y responsabilidad administrativa", base: "Art. 2° quinquies Ley 19.983; Ley 18.575 (probidad); Ley 18.834. Dictámenes N° 85.700/2016, N° 23.518/2019, N° 10.292/2020, E14.498/2021, E61.245/2022." },
+    { id: "incumplimientoCGR", texto: "Incumplimiento de requerimientos de la Contraloría (Ley 10.336): multa y suspensión", base: "Art. 9° Ley 10.336 (multa de hasta 15 días de remuneraciones; suspensión sin goce de remuneraciones). Res. Ex. N° 2.289/2024 CGR." },
     { id: "perjuicioFiscal", texto: "Perjuicio fiscal", base: "Ley 10.336 (CGR) + Dictamen E232942/2022" },
     { id: "enriquecimientoSinCausa", texto: "Enriquecimiento sin causa", base: "Art. 2285 CC" },
-    { id: "desviacionPoder", texto: "Desviación de poder", base: "Art. 7° inc. 2° Constitución" },
-    { id: "obstaculizacionPago", texto: "Obstaculización artificial del pago", base: "Principio de transparencia. Dictamen E26274/2025." },
-    { id: "incumplimiento30dias", texto: "Incumplimiento del plazo de 30 días", base: "Art. 2° quáter Ley 19.983. Dictámenes N° 7.561/2018, E327515/2023." },
-    { id: "recepcionConformeNoImpugnada", texto: "Recepción conforme no impugnada", base: "Arts. 3 y 5 Ley 19.983 → aceptación tácita. Dictámenes N° 52.665/2016, E325.362/2023." }
+    { id: "desviacionPoder", texto: "Actuación fuera de competencia o con desviación de poder", base: "Arts. 6° y 7° Constitución; art. 2° Ley 18.575." }
 ];
+const INCUMPLIMIENTOS_LEGADO = {
+    recepcionConformeNoImpugnada: 'noReclamacion',
+    incumplimiento30dias: 'pagoFueraPlazo',
+    obstaculizacionPago: 'bloqueoFacturacion',
+    faltaProbidad: 'responsabilidadAdministrativa',
+    faltaDeberFuncionario: 'responsabilidadAdministrativa'
+};
+function normalizarIncumplimientos(ids) {
+    const out = [];
+    (Array.isArray(ids) ? ids : []).forEach(function(id){
+        const n = INCUMPLIMIENTOS_LEGADO[id] || id;
+        if (out.indexOf(n) < 0) out.push(n);
+    });
+    return out;
+}
 function textoFundamentos(ids) {
+    ids = normalizarIncumplimientos(ids);
     if (!ids.length) return '<p>No se registraron incumplimientos específicos.</p>';
     const mapTexto = {
-        noReclamacion: '<li><strong>No reclamación en plazo legal (8 días corridos):</strong> conforme a los arts. 3 y 5 de la Ley N° 19.983, al no haber sido reclamada dentro de los 8 días corridos siguientes a su recepción, la factura se tiene por irrevocablemente aceptada y su copia cedible adquiere mérito ejecutivo. La CGR ha sido consistente en este criterio (Dictámenes N° 52.665/2016, N° 25.148/2019, E207.521/2021 y E325.362/2023).</li>',
-        bloqueoFacturacion: '<li><strong>Bloqueo arbitrario de facturación:</strong> según Dictamen CGR N° 31.234/2018, la recepción conforme de los bienes genera la obligación de pago, independientemente de autorizaciones administrativas internas.</li>',
+        noReclamacion: '<li><strong>Factura no reclamada: aceptación irrevocable y recepción conforme:</strong> conforme a los arts. 3 y 5 de la Ley N° 19.983, al no haber sido reclamada dentro de los 8 días corridos siguientes a su recepción, la factura se tiene por irrevocablemente aceptada y su copia cedible adquiere mérito ejecutivo; la recepción conforme no impugnada acredita la entrega y obliga al pago. La CGR ha sido consistente en este criterio (Dictámenes N° 52.665/2016, N° 25.148/2019, E207.521/2021 y E325.362/2023).</li>',
+        pagoFueraPlazo: '<li><strong>Mora: pago fuera del plazo de 30 días:</strong> el art. 133 del Reglamento de la Ley N° 19.886 (D.S. N° 661/2024, Ministerio de Hacienda) y los arts. 2° bis y 2° quáter de la Ley N° 19.983, incorporados por la Ley N° 21.131, imponen pagar dentro de los 30 días corridos siguientes a la recepción de la factura o del instrumento tributario de cobro; solo las bases o el contrato, por motivos fundados, pueden fijar un plazo mayor, con tope de 60 días. Vencido el plazo, el deudor incurre en mora y se devengan los intereses y la comisión de cobranza previstos en los arts. 2° bis y 2° ter de la misma ley (Directiva de Contratación Pública N° 23/2026; Dictámenes CGR N° 7.561/2018, E327515/2023 y E226682/2022).</li>',
+        bloqueoFacturacion: '<li><strong>Bloqueo u obstaculización arbitraria de la facturación o del pago:</strong> según Dictamen CGR N° 31.234/2018, la recepción conforme de los bienes genera la obligación de pago, independientemente de autorizaciones administrativas internas; condicionar o dilatar artificialmente el ingreso o el pago de la factura vulnera además el principio de transparencia (Dictamen CGR E26274/2025).</li>',
         multaIlegal: '<li><strong>Aplicación indebida de multa:</strong> las bases de licitación deben contener las condiciones de sanción (Ley N° 19.886). El Dictamen CGR E26274/2025 dispone que las condiciones de pago no pueden ser modificadas unilateralmente por la Administración.</li>',
-        pagoFueraPlazo: '<li><strong>Pago fuera de plazo (mora):</strong> el art. 2° bis de la Ley N° 19.983 (incorporado por la Ley N° 21.131) establece que el no pago dentro de 30 días corridos desde la recepción conforme constituye mora automática. Dictámenes CGR N° 7.561/2018, E327515/2023 y E226682/2022 ratifican esta obligación.</li>',
-        faltaProbidad: '<li><strong>Falta a la probidad administrativa:</strong> el art. 13 de la Ley N° 18.575 exige una conducta intachable. La CGR ha señalado que la infracción es especialmente grave cuando ocasiona detrimento patrimonial al Estado (Dictámenes N° 85.700/2016, N° 23.518/2019, E14.498/2021 y E61.245/2022).</li>',
-        faltaDeberFuncionario: '<li><strong>Falta al deber funcionario:</strong> el art. 2° quinquies de la Ley N° 19.983 dispone que el pago fuera de plazo genera las responsabilidades administrativas que correspondan, previa investigación sumaria o sumario administrativo, que la Contraloría General de la República puede incoar (Ley N° 18.834; Dictamen N° 10.292/2020).</li>',
+        reclamoPagoSinRespuesta: '<li><strong>Reclamo de pago sin respuesta:</strong> la Directiva de Contratación Pública N° 23/2026 de ChileCompra establece que, ingresado el reclamo por no pago en el Gestor de Reclamos, el organismo comprador debe responder al proveedor dentro de 5 días hábiles, en cumplimiento de la obligación de pago oportuno del art. 133 del D.S. N° 661/2024.</li>',
+        responsabilidadAdministrativa: '<li><strong>Falta a la probidad y responsabilidad administrativa:</strong> el principio de probidad de la Ley N° 18.575 exige una conducta funcionaria intachable y el desempeño leal y honesto de la función, y su infracción es especialmente grave cuando ocasiona detrimento patrimonial al Estado (Dictámenes N° 85.700/2016, N° 23.518/2019, E14.498/2021 y E61.245/2022). Además, el art. 2° quinquies de la Ley N° 19.983 dispone que el pago fuera de plazo genera las responsabilidades administrativas que correspondan, previa investigación sumaria o sumario administrativo, que la Contraloría General de la República puede incoar (Ley N° 18.834; Dictamen N° 10.292/2020).</li>',
+        incumplimientoCGR: '<li><strong>Incumplimiento de requerimientos de la Contraloría General de la República:</strong> el art. 9° de la Ley N° 10.336 faculta al Contralor General para requerir directamente datos e informaciones a las autoridades y funcionarios, y dispone que la falta de observancia oportuna de esos requerimientos puede sancionarse con multa de hasta quince días de remuneraciones y, si se estima procedente, con la suspensión sin goce de remuneraciones del funcionario responsable hasta que se remitan los antecedentes, conforme al procedimiento aprobado por la Resolución Exenta N° 2.289/2024 de la CGR.</li>',
         perjuicioFiscal: '<li><strong>Perjuicio fiscal:</strong> de acuerdo con la Ley N° 10.336 y el Dictamen CGR E232942/2022, los intereses y la comisión del 1% que debe pagar el organismo con cargo a su presupuesto representan un daño fiscal evitable.</li>',
         enriquecimientoSinCausa: '<li><strong>Enriquecimiento sin causa (art. 2285 CC):</strong> el organismo ha utilizado los bienes facturados sin pagar el precio.</li>',
-        desviacionPoder: '<li><strong>Desviación de poder (art. 7° inc. 2° Constitución):</strong> el uso de facultades con fines distintos vicia de nulidad el acto administrativo.</li>',
-        obstaculizacionPago: '<li><strong>Obstaculización artificial del pago:</strong> vulnera el principio de transparencia. Dictamen CGR E26274/2025.</li>',
-        incumplimiento30dias: '<li><strong>Incumplimiento del plazo de 30 días:</strong> art. 2° quáter Ley 19.983. Dictámenes CGR N° 7.561/2018 y E327515/2023.</li>',
-        recepcionConformeNoImpugnada: '<li><strong>Recepción conforme no impugnada:</strong> la factura no reclamada en 8 días corridos se entiende irrevocablemente aceptada, constituyendo título ejecutivo (Dictámenes N° 52.665/2016 y E325.362/2023).</li>'
+        desviacionPoder: '<li><strong>Actuación fuera de competencia o con desviación de poder (arts. 6° y 7° de la Constitución; art. 2° Ley N° 18.575):</strong> los órganos del Estado solo pueden actuar dentro de su competencia y en la forma que prescribe la ley; el uso de facultades con fines distintos de los previstos vicia de nulidad el acto administrativo.</li>'
     };
     let html = '<ul>';
     ids.forEach(id => { if (mapTexto[id]) html += mapTexto[id]; });
@@ -15017,21 +15029,19 @@ function textoFundamentos(ids) {
     return html;
 }
 function textoArgumentosDescargos(argumentos) {
+    argumentos = (Array.isArray(argumentos) ? argumentos : []).map(function(a){ return a === 'faltaReclamo' ? 'tituloEjecutivo' : a; });
     let html = '';
     if (argumentos.includes('extemporaneidad')) {
         html += '<li><strong>Extemporaneidad de la multa:</strong> la sanción fue notificada transcurrido un lapso irrazonable desde la ocurrencia de los hechos, desnaturalizando su función preventiva y compensatoria y lesionando la seguridad jurídica y la confianza legítima del contratista. Las multas contractuales están sujetas a la prescripción civil y deben imponerse dentro de un plazo oportuno, so pena de devenir ilegales (Dictamen CGR N° 20.033 de 2013; art. 1545 CC).</li>';
-    }
-    if (argumentos.includes('faltaReclamo')) {
-        html += '<li><strong>Falta de reclamo oportuno y aceptación tácita:</strong> la entidad recepcionó los bienes sin formular observación ni constancia de incumplimiento dentro de un plazo razonable. La ausencia de reclamación dentro de los 8 días siguientes a la recepción convierte la factura en título ejecutivo irrevocablemente aceptado, y la posterior pretensión sancionatoria vulnera el principio de coherencia administrativa (arts. 3 y 5 Ley N° 19.983; Dictámenes CGR N° 52.665 de 2016, N° 25.148 de 2019 y E325.362 de 2023).</li>';
     }
     if (argumentos.includes('improcedenciaTotal')) {
         html += '<li><strong>Improcedencia de la multa sobre el total de la contratación:</strong> la sanción debe recaer exclusivamente sobre la parte efectivamente incumplida, no sobre prestaciones cumplidas y aceptadas sin reparos. Aplicar la multa sobre el monto total configura enriquecimiento sin causa, prohibido por el art. 2285 CC y el principio de proporcionalidad sancionatoria (Dictamen CGR N° 3.133 de 2009).</li>';
     }
     if (argumentos.includes('tituloEjecutivo')) {
-        html += '<li><strong>Factura como título ejecutivo firme:</strong> la factura no reclamada dentro del plazo legal de 8 días corridos se entiende aceptada irrevocablemente y constituye título ejecutivo, impidiendo a la Administración desconocer la obligación de pago (arts. 3 y 5 Ley N° 19.983; Dictámenes CGR N° 52.665 de 2016 y E325.362 de 2023).</li>';
+        html += '<li><strong>Falta de reclamo oportuno: aceptación irrevocable y título ejecutivo:</strong> la entidad recepcionó los bienes sin formular observación ni constancia de incumplimiento. La factura no reclamada dentro de los 8 días corridos siguientes a su recepción se tiene por irrevocablemente aceptada y su copia cedible adquiere mérito ejecutivo, de modo que la Administración no puede después desconocer la obligación de pago ni pretender sancionar prestaciones aceptadas sin reparos, en resguardo del principio de coherencia administrativa (arts. 3 y 5 Ley N° 19.983; Dictámenes CGR N° 52.665 de 2016, N° 25.148 de 2019 y E325.362 de 2023).</li>';
     }
     if (argumentos.includes('noSuspensionPlazo')) {
-        html += '<li><strong>La multa no suspende ni extiende el plazo de pago:</strong> la mora opera automáticamente a los 30 días corridos desde la recepción conforme de la factura (art. 2° bis Ley N° 19.983, incorporado por la Ley N° 21.131). La imposición de una multa no constituye causal legal para diferir el pago ni para suspender la obligación principal (Dictamen CGR E327515 de 2023).</li>';
+        html += '<li><strong>La multa no suspende ni extiende el plazo de pago:</strong> el pago debe efectuarse dentro de los 30 días corridos siguientes a la recepción de la factura (art. 133 D.S. N° 661/2024; arts. 2° bis y 2° quáter Ley N° 19.983, incorporados por la Ley N° 21.131; Directiva de Contratación Pública N° 23/2026). La imposición de una multa no constituye causal legal para diferir el pago ni para suspender la obligación principal (Dictamen CGR E327515 de 2023).</li>';
     }
     if (argumentos.includes('autotutela')) {
         html += '<li><strong>Prohibición de autotutela administrativa:</strong> el organismo no puede retener el pago ni compensar unilateralmente la deuda con la multa. Dicha conducta implica hacerse justicia por sí mismo, vulnerando el principio de legalidad y el debido proceso. Las condiciones de pago no pueden ser modificadas unilateralmente, y toda compensación o descuento requiere procedimiento o autorización legal expresa (Dictamen CGR E26274 de 2025).</li>';
@@ -15043,7 +15053,7 @@ function textoArgumentosDescargos(argumentos) {
         html += '<li><strong>Condiciones de la multa no establecidas previamente en las bases:</strong> las sanciones deben estar definidas en las bases de licitación o en el contrato antes de la adjudicación, con indicación de porcentajes, plazos y mecanismos de aplicación. No es lícito imponer multas bajo reglas informadas con posterioridad, pues ello vulnera el principio de transparencia y la buena fe contractual (Ley N° 19.886; Dictamen CGR E26274 de 2025).</li>';
     }
     if (argumentos.includes('vulneracionProbidad')) {
-        html += '<li><strong>Vulneración a la probidad y deber funcionario:</strong> la conducta omisiva, tardía o de bloqueo del organismo configura infracción a los deberes funcionarios de probidad, celeridad y transparencia (art. 13 Ley N° 18.575; Ley N° 19.886; Dictámenes CGR N° 85.700 de 2016 y E61.245 de 2022).</li>';
+        html += '<li><strong>Vulneración a la probidad y deber funcionario:</strong> la conducta omisiva, tardía o de bloqueo del organismo configura infracción a los deberes funcionarios de probidad, celeridad y transparencia (Ley N° 18.575; art. 2° quinquies Ley N° 19.983; Ley N° 19.886; Dictámenes CGR N° 85.700 de 2016 y E61.245 de 2022).</li>';
     }
     if (argumentos.includes('faltaPerjuicio')) {
         html += '<li><strong>Ausencia de perjuicio fiscal acreditado:</strong> la multa carece de justificación si no se acredita un daño real y cuantificable derivado del incumplimiento imputado. La imposición de una sanción sin perjuicio efectivo configura enriquecimiento injustificado del fisco (Dictamen CGR E232942 de 2022).</li>';
@@ -15052,17 +15062,16 @@ function textoArgumentosDescargos(argumentos) {
 }
 const CAUSALES_DESCARGOS = [
     { value: 'extemporaneidad', titulo: 'Extemporaneidad de la multa', resumen: 'Notificada mucho después de los hechos (Dictamen CGR N° 20.033/2013; art. 1545 CC).' },
-    { value: 'faltaReclamo', titulo: 'Falta de reclamo oportuno / Aceptación tácita', resumen: 'Recepción sin observaciones (Dictámenes N° 7.561/2018, 52.665/2016, E325.362/2023).' },
     { value: 'improcedenciaTotal', titulo: 'Multa sobre el total sin distinguir incumplimiento efectivo', resumen: 'Debe recaer solo sobre lo no cumplido (Dictamen CGR N° 3.133/2009; art. 2285 CC).' },
-    { value: 'tituloEjecutivo', titulo: 'Factura como título ejecutivo por falta de reclamación', resumen: 'Art. 4 Ley 19.983 (Dictámenes N° 52.665/2016, E325.362/2023).' },
-    { value: 'noSuspensionPlazo', titulo: 'La multa no suspende ni extiende el plazo de pago', resumen: 'Art. 2° bis Ley 19.983 (Dictamen E327515/2023).' },
+    { value: 'tituloEjecutivo', titulo: 'Falta de reclamo oportuno: aceptación irrevocable y título ejecutivo', resumen: 'Arts. 3 y 5 Ley 19.983 (Dictámenes N° 52.665/2016, N° 25.148/2019, E325.362/2023).' },
+    { value: 'noSuspensionPlazo', titulo: 'La multa no suspende ni extiende el plazo de pago', resumen: 'Art. 133 D.S. 661/2024; arts. 2° bis y 2° quáter Ley 19.983; Directiva N° 23/2026 (Dictamen E327515/2023).' },
     { value: 'autotutela', titulo: 'Prohibición de autotutela administrativa', resumen: 'No puede retener ni compensar unilateralmente (Dictamen CGR E26274/2025).' },
     { value: 'bloqueoFacturacion', titulo: 'Bloqueo arbitrario de la facturación', resumen: 'La recepción conforme obliga al pago (Dictamen CGR N° 31.234/2018).' },
     { value: 'condicionesExtemporaneas', titulo: 'Condiciones de la multa no establecidas previamente', resumen: 'Deben definirse antes de la adjudicación (Ley 19.886; Dictamen E26274/2025).' },
-    { value: 'vulneracionProbidad', titulo: 'Vulneración de los principios de probidad y buena fe', resumen: 'Art. 13 Ley 18.575 (Dictámenes N° 85.700/2016 y E61.245/2022).' },
+    { value: 'vulneracionProbidad', titulo: 'Vulneración de los principios de probidad y buena fe', resumen: 'Ley 18.575; art. 2° quinquies Ley 19.983 (Dictámenes N° 85.700/2016 y E61.245/2022).' },
     { value: 'faltaPerjuicio', titulo: 'Ausencia de perjuicio fiscal acreditado', resumen: 'Sin daño real que justifique la cuantía (Dictamen CGR E232942/2022).' }
 ];
-__X.INCUMPLIMIENTOS = INCUMPLIMIENTOS; __X.textoFundamentos = textoFundamentos; __X.textoArgumentosDescargos = textoArgumentosDescargos; __X.CAUSALES_DESCARGOS = CAUSALES_DESCARGOS;
+__X.INCUMPLIMIENTOS = INCUMPLIMIENTOS; __X.normalizarIncumplimientos = normalizarIncumplimientos; __X.textoFundamentos = textoFundamentos; __X.textoArgumentosDescargos = textoArgumentosDescargos; __X.CAUSALES_DESCARGOS = CAUSALES_DESCARGOS;
 })();
 
 (function(){
@@ -15070,7 +15079,7 @@ const { store } = __X;
 const { formatCLP } = __X;
 const { getUltimaTasa } = __X;
 
-const NORMAS_REF_ESTANDAR = '<p style="font-size:9pt;margin-top:24pt;color:#475569;"><em>Referencias normativas: Ley N° 19.886 arts. 1°, 3°; Decreto N° 661/2024, del Ministerio de Hacienda (Reglamento de la Ley N° 19.886), art. 133; Directiva de Contratación Pública N° 23/2026 (ChileCompra); Ley N° 19.983 arts. 2° bis, 2° ter, 2° quáter, 2° quinquies, 3°, 5° (texto incorporado por la Ley N° 21.131); Ley N° 18.575 art. 13°; Ley N° 10.336, Orgánica Constitucional de la Contraloría General de la República; CC arts. 1545, 1546, 2285; Dictámenes CGR N° 20.033/2013, N° 3.133/2009, N° 7.561/2018, N° 31.234/2018, N° 52.665/2016, N° 25.148/2019, E26274/2025, E232942/2022, E325.362/2023, E327515/2023, E61.245/2022; Corte Suprema Rol N° 19.943-2023.</em></p>';
+const NORMAS_REF_ESTANDAR = '<p style="font-size:9pt;margin-top:24pt;color:#475569;"><em>Referencias normativas: Ley N° 19.886 arts. 1°, 3°; Decreto N° 661/2024, del Ministerio de Hacienda (Reglamento de la Ley N° 19.886), art. 133; Directiva de Contratación Pública N° 23/2026 (ChileCompra); Ley N° 19.983 arts. 2° bis, 2° ter, 2° quáter, 2° quinquies, 3°, 5° (texto incorporado por la Ley N° 21.131); Ley N° 18.575 (probidad); Ley N° 10.336, Orgánica de la Contraloría General de la República, art. 9°; Res. Ex. N° 2.289/2024 CGR; CC arts. 1545, 1546, 2285; Dictámenes CGR N° 20.033/2013, N° 3.133/2009, N° 7.561/2018, N° 31.234/2018, N° 52.665/2016, N° 25.148/2019, E26274/2025, E232942/2022, E325.362/2023, E327515/2023, E61.245/2022; Corte Suprema Rol N° 19.943-2023.</em></p>';
 const FIRMA_STD = '<p style="margin-top:32pt;">Sin otro particular, saludan atentamente,</p><p style="margin-top:40pt;">_________________________________<br><strong>{{PROV_REP}}</strong><br>{{PROV_RAZON}}</p>';
 const PLANTILLAS_DEFAULT = {
     'legal-mp': {
@@ -15453,7 +15462,7 @@ async function cargarEstado() {
         estado.lugar = s.lugar || '';
         estado.hechosLibres = s.hechosLibres || '';
         estado.fundamentos = s.fundamentos || '';
-        estado.incumplimientos = Array.isArray(s.incumplimientos) ? s.incumplimientos : [];
+        estado.incumplimientos = __X.normalizarIncumplimientos ? __X.normalizarIncumplimientos(s.incumplimientos) : (Array.isArray(s.incumplimientos) ? s.incumplimientos : []);
         estado.ufValor = s.ufValor > 0 ? s.ufValor : 38000;
         estado.facturas = Array.isArray(s.facturas) ? s.facturas : [];
     }
@@ -16057,30 +16066,38 @@ g('#btnLimpiar').addEventListener('click', () => _limpiar(box));
         const nota = prompt('Nota para el área de destino (opcional):');
         if (nota === null) return;
         let n = 0, omitidos = 0;
-        sel.forEach(doc => { const r = __X.derivarDocumento(doc, destinoId, u ? u.nombre : '', nota); r.ok ? n++ : omitidos++; });
+        const bloqueos = [];
+        const maestros = [];
+        const nombre = u ? u.nombre : '';
+        sel.forEach(cop => {
+            const m = __X.maestroCC ? __X.maestroCC(cop, true) : null;
+            if (!m) { omitidos++; bloqueos.push('Factura ' + (cop.factura || cop.numero || '') + ': no se encontró el documento en Cuentas Corrientes'); return; }
+            if (m.asignadoA !== 'cobranza' && destinoId !== 'cobranza') {
+                m.asignadoA = 'cobranza';
+                m.rutaAreas = Array.isArray(m.rutaAreas) ? m.rutaAreas : [];
+                m.rutaAreas.push('cuentas');
+                m.derivaciones = Array.isArray(m.derivaciones) ? m.derivaciones : [];
+                m.derivaciones.push({ desde: 'cuentas', hacia: 'cobranza', fecha: new Date().toISOString(), usuario: nombre, nota: 'Gestión en Cobranza', devolucion: false });
+            }
+            const r = __X.derivarDocumento(m, destinoId, nombre, nota);
+            if (!r.ok) { omitidos++; if (r.error) bloqueos.push('Factura ' + (cop.factura || cop.numero || '') + ': ' + r.error); return; }
+            n++;
+            cop.asignadoA = m.asignadoA || '';
+            cop.rutaAreas = m.rutaAreas;
+            cop.derivaciones = m.derivaciones;
+            cop.fechaAsignacion = m.fechaAsignacion;
+            cop.seleccionado = false;
+            m.interesTotal = cop.interesTotal || 0;
+            m.uf = cop.uf || 0;
+            maestros.push(m);
+        });
         __X.guardarEstado();
-
-        toast(n + ' documento(s) enviados a ' + __X.areaPorId(destinoId).label + (omitidos ? ' · ' + omitidos + ' ya estaban ahí' : ''), omitidos ? 'warn' : 'success', 5000);
+        if (__X.guardar) __X.guardar();
+        let sync = { fallos: 0 };
+        if (maestros.length && __X.sincronizarDerivacionCC) sync = await __X.sincronizarDerivacionCC(maestros, nombre);
+        toast(n + ' documento(s) enviados a ' + __X.areaPorId(destinoId).label + (omitidos ? ' · ' + omitidos + ' no enviados' : '') + (sync.fallos ? ' · ' + sync.fallos + ' pendientes de sincronizar' : ''), omitidos || sync.fallos ? 'warn' : 'success', 7000);
+        if (bloqueos.length) toast(bloqueos.slice(0, 3).join(' | '), 'warn', 9000);
         _refrescar(box);
-        try {
-
-            if (__X.cargar) await __X.cargar();
-            const docsCC = __X.docs ? __X.docs() : [];
-            let mod = false;
-            sel.forEach(cobDoc => {
-                const ccx = docsCC.find(x => x.factura===cobDoc.factura && x.rut===cobDoc.rut);
-                if(ccx){
-                    ccx.asignadoA = cobDoc.asignadoA;
-                    ccx.interesTotal = cobDoc.interesTotal || 0;
-                    ccx.uf = cobDoc.uf || 0;
-                    ccx.diasAtraso = cobDoc.diasAtraso || 0;
-                    mod=true;
-                }
-            });
-            if (mod && __X.guardar) __X.guardar();
-        } catch (e2) {
-            toast('El documento se envió, pero no se pudo actualizar el interés en Cuentas Corrientes: ' + (e2 && e2.message ? e2.message : e2), 'warn', 6000);
-        }
       } catch (e) {
         toast('No se pudo enviar el documento: ' + (e && e.message ? e.message : e), 'error', 6000);
       }
@@ -16099,32 +16116,27 @@ g('#btnLimpiar').addEventListener('click', () => _limpiar(box));
         const nota = prompt('Motivo de la devolución (opcional):');
         if (nota === null) return;
         let n = 0;
-        sel.forEach(doc => {
-            if (__X.devolverDocumento(doc, u ? u.nombre : '', nota).ok) n++;
+        const maestros = [];
+        const nombre = u ? u.nombre : '';
+        sel.forEach(cop => {
+            const m = __X.maestroCC ? __X.maestroCC(cop, false) : null;
+            if (!m) return;
+            if (__X.devolverDocumento(m, nombre, nota).ok) {
+                n++;
+                cop.asignadoA = m.asignadoA || '';
+                cop.rutaAreas = m.rutaAreas;
+                cop.derivaciones = m.derivaciones;
+                cop.fechaAsignacion = m.fechaAsignacion;
+                cop.seleccionado = false;
+                maestros.push(m);
+            }
         });
         __X.guardarEstado();
-
-        toast(n + ' documento(s) devueltos al área anterior', 'success');
+        if (__X.guardar) __X.guardar();
+        let sync = { fallos: 0 };
+        if (maestros.length && __X.sincronizarDerivacionCC) sync = await __X.sincronizarDerivacionCC(maestros, nombre);
+        toast(n + ' documento(s) devueltos al área anterior' + (sync.fallos ? ' · ' + sync.fallos + ' pendientes de sincronizar' : ''), sync.fallos ? 'warn' : 'success');
         _refrescar(box);
-        try {
-
-            if (__X.cargar) await __X.cargar();
-            const docsCC = __X.docs ? __X.docs() : [];
-            let mod = false;
-            sel.forEach(cobDoc => {
-                const ccx = docsCC.find(x => x.factura===cobDoc.factura && x.rut===cobDoc.rut);
-                if(ccx){
-                    ccx.asignadoA = cobDoc.asignadoA;
-                    ccx.interesTotal = cobDoc.interesTotal || 0;
-                    ccx.uf = cobDoc.uf || 0;
-                    ccx.diasAtraso = cobDoc.diasAtraso || 0;
-                    mod=true;
-                }
-            });
-            if (mod && __X.guardar) __X.guardar();
-        } catch (e2) {
-            toast('El documento se devolvió, pero no se pudo actualizar el interés en Cuentas Corrientes: ' + (e2 && e2.message ? e2.message : e2), 'warn', 6000);
-        }
       } catch (e) {
         toast('No se pudo devolver el documento: ' + (e && e.message ? e.message : e), 'error', 6000);
       }
@@ -16748,6 +16760,7 @@ function _pedirDatosOrganismo(box, plantillaId, sel) {
 }
 
 let _ultimoDoc = null;
+let _legalFacturas = [];
 
 async function renderDocumentos(box) {
     await T.cargarTasas();
@@ -16782,6 +16795,14 @@ async function renderDocumentos(box) {
         '    <div class="filter-field"><label>Factura</label><input id="legFiltFact" placeholder="N\u00b0 factura..."></div>' +
         '    <div class="filter-field"><label>Raz\u00f3n social</label><input id="legFiltRazon" placeholder="Nombre..."></div>' +
         '  </div>' +
+        '  <div class="toolbar" id="legSelBar" style="margin-bottom:6px;flex-wrap:wrap;gap:6px;">' +
+        '    <span class="erp-acciones-pie-titulo">Selecci\u00f3n</span>' +
+        '    <button class="btn-outline btn-sm" id="legSelTodos">\u2611 Todos</button>' +
+        '    <button class="btn-outline btn-sm" id="legSelNinguno">\u2610 Ninguno</button>' +
+        '    <button class="btn-outline btn-sm" id="legSelInvertir">\u21C5 Invertir</button>' +
+        '    <button class="btn-outline btn-sm" id="legSelRut" title="Selecciona todos los documentos del RUT del primer documento marcado">\u{1F465} Mismo RUT</button>' +
+        '    <button class="btn-outline btn-sm" id="legSelVencidos" title="Selecciona los documentos con saldo y d\u00edas de atraso">\u23F0 Vencidos con saldo</button>' +
+        '  </div>' +
         '  <div id="legBanner" class="info" style="margin-bottom:8px;"></div>' +
         '  <div id="legError" class="error"></div>' +
         '  <div class="table-wrap grid-scroll"><table>' +
@@ -16794,7 +16815,9 @@ async function renderDocumentos(box) {
         '      <th>Emisi\u00f3n' + I.icono('fechaEmision') + '</th>' +
         '      <th>Vencimiento' + I.icono('vencimiento') + '</th>' +
         '      <th class="der">Monto (IVA)' + I.icono('monto') + '</th>' +
+        '      <th class="der">Saldo</th>' +
         '      <th class="der">Intereses' + I.icono('interes') + '</th>' +
+        '      <th class="der">Total a cobrar</th>' +
         '      <th class="cen">D\u00edas' + I.icono('dias') + '</th>' +
         '      <th class="cen">Estado</th>' +
         '      <th class="cen">Acciones</th>' +
@@ -16855,16 +16878,23 @@ async function renderDocumentos(box) {
         const tbody = box.querySelector('#legBody');
         if (!tbody) return;
         if (!filtrados.length) {
-            tbody.innerHTML = '<tr><td colspan="12" style="text-align:center;color:#94a3b8;padding:16px;">Sin documentos derivados a Legal</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="14" style="text-align:center;color:#94a3b8;padding:16px;">Sin documentos derivados a Legal</td></tr>';
             g('#legBanner').innerHTML = '';
+            _legalFacturas = [];
             return;
         }
+        filtrados.forEach(d => {
+            const ven = __X.fechaISO(d.vencimiento);
+            d.diasAtraso = (Number(d.saldo) || 0) > 0 && ven ? Math.max(0, Math.floor((new Date() - new Date(ven + 'T12:00:00')) / 86400000)) : 0;
+        });
+        T.recalcular(filtrados);
         const selArray = filtrados.filter(d => _sel.has(d.factura || d.numero || ''));
         const ruts = [...new Set(selArray.map(d => d.rut).filter(Boolean))];
+        const tot = T.totalesGestion(selArray);
         g('#legBanner').innerHTML = selArray.length
             ? (ruts.length > 1
                 ? '<div class="error">\u274C Documentos de distintos RUT \u2014 solo un cliente a la vez.</div>'
-                : '<div class="info">' + selArray.length + ' documento(s) seleccionados \u2014 RUT <b>' + escH(ruts[0] || '(sin RUT)') + '</b>.</div>')
+                : '<div class="info">' + selArray.length + ' documento(s) seleccionados \u2014 RUT <b>' + escH(ruts[0] || '(sin RUT)') + '</b>. Saldo: <b>' + formatCLP(tot.totalFacturasConIVA) + '</b> \u00b7 Intereses: <b>' + formatCLP(tot.totalIntereses) + '</b> \u00b7 Comisi\u00f3n 1%: <b>' + formatCLP(tot.comision) + '</b> \u00b7 Total a cobrar: <b>' + formatCLP(tot.totalCobrar) + '</b></div>')
             : '<div class="info">Selecciona los documentos del cliente para generar el documento legal.</div>';
 
         tbody.innerHTML = '';
@@ -16882,15 +16912,28 @@ async function renderDocumentos(box) {
                 '<td>' + escH(d.razon || '\u2014') + '</td>' +
                 '<td>' + escH(__X.fechaCL(d.fechaEmision) || '\u2014') + '</td>' +
                 '<td>' + escH(__X.fechaCL(d.vencimiento) || '\u2014') + '</td>' +
-                '<td style="text-align:right">' + formatCLP(d.montoTotal || d.monto || 0) + '</td>' +
+                '<td style="text-align:right">' + formatCLP(d.monto || d.montoTotal || 0) + '</td>' +
+                '<td style="text-align:right"><b>' + formatCLP(T.saldoBaseFactura(d)) + '</b></td>' +
                 '<td style="text-align:right">' + formatCLP(d.interesTotal || 0) + '</td>' +
+                '<td style="text-align:right"><b>' + formatCLP(T.saldoFactura(d)) + '</b></td>' +
                 '<td style="text-align:center"><span class="badge ' + (dias > 0 ? 'badge-red' : 'badge-green') + '">' + dias + '</span></td>' +
                 '<td style="text-align:center"><span class="badge badge-blue">Legal</span></td>' +
-                '<td style="text-align:center"><button class="btn-icon btn-primary" data-bit-leg="1" title="Bitácora de gestiones">\u{1F4CB}' + ((d.bitacora || []).length ? '<sup>' + d.bitacora.length + '</sup>' : '') + '</button></td>';
+                '<td style="text-align:center;white-space:nowrap;">' +
+                '<button class="btn-icon btn-primary" data-bit-leg="1" title="Bitácora de gestiones">\u{1F4CB}' + ((d.bitacora || []).length ? '<sup>' + d.bitacora.length + '</sup>' : '') + '</button> ' +
+                '<button class="btn-icon btn-outline" data-gen-leg="1" title="Generar documento solo con este">\u{1F4C4}</button> ' +
+                '<button class="btn-icon btn-outline" data-env-leg="1" title="Enviar este documento al destino elegido">\u27A1\uFE0F</button> ' +
+                '<button class="btn-icon btn-outline" data-dev-leg="1" title="Devolver este documento al área anterior">\u21A9\uFE0F</button></td>';
             tr.querySelector('.legChk').addEventListener('change', e => {
                 if (e.target.checked) _sel.add(id); else _sel.delete(id);
                 _pintar();
             });
+            tr.querySelector('[data-gen-leg]').addEventListener('click', () => {
+                _sel.clear(); _sel.add(id); _ultimoDoc = null; _pintar();
+                const caja = box.querySelector('#doInc'); if (caja && caja.scrollIntoView) caja.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                toast('Documento seleccionado. Elige tipo y formato abajo.', 'info');
+            });
+            tr.querySelector('[data-env-leg]').addEventListener('click', () => { _enviarDocs([d]); });
+            tr.querySelector('[data-dev-leg]').addEventListener('click', () => { _devolverDocs([d]); });
             const btnBitLeg = tr.querySelector('[data-bit-leg]');
             if (btnBitLeg) btnBitLeg.addEventListener('click', () => {
                 abrirBitacoraFactura(d, box.querySelector('#legModal'), () => _pintar());
@@ -16898,8 +16941,8 @@ async function renderDocumentos(box) {
             tbody.appendChild(tr);
         });
 
-        estado.facturas = _docs.map(d => ({
-            ...d, montoTotal: d.montoTotal != null ? d.montoTotal : (d.monto || 0),
+        _legalFacturas = _docs.map(d => Object.assign({}, d, {
+            montoTotal: d.monto != null ? d.monto : (d.montoTotal || 0),
             seleccionado: _sel.has(d.factura || d.numero || '')
         }));
     };
@@ -16915,9 +16958,8 @@ async function renderDocumentos(box) {
         const el = box.querySelector(sel); if (el) el.addEventListener('input', _pintar);
     });
 
-    g('#legEnviar').addEventListener('click', async () => {
+    const _enviarDocs = async (selDocs) => {
       try {
-        const selDocs = _docs.filter(d => _sel.has(d.factura || d.numero || ''));
         if (!selDocs.length) { toast('Selecciona los documentos a enviar', 'error'); return; }
         const destinoId = box.querySelector('#legDestino') ? box.querySelector('#legDestino').value : '';
         if (!destinoId) { toast('Selecciona un destino', 'error'); return; }
@@ -16925,32 +16967,51 @@ async function renderDocumentos(box) {
         const nota = prompt('Nota para el \u00e1rea de destino (opcional):');
         if (nota === null) return;
         let n = 0, omitidos = 0;
-        selDocs.forEach(doc => { const r = __X.derivarDocumento(doc, destinoId, u ? u.nombre : '', nota); r.ok ? n++ : omitidos++; });
+        const movidos = [];
+        selDocs.forEach(doc => { const r = __X.derivarDocumento(doc, destinoId, u ? u.nombre : '', nota); if (r.ok) { n++; movidos.push(doc); } else { omitidos++; } });
         if (__X.guardar) __X.guardar();
+        if (movidos.length && __X.sincronizarDerivacionCC) await __X.sincronizarDerivacionCC(movidos, u ? u.nombre : '');
         _sel.clear();
         toast(n + ' documento(s) enviados' + (omitidos ? ' \u00b7 ' + omitidos + ' ya estaban ah\u00ed' : ''), omitidos ? 'warn' : 'success', 5000);
         _pintar();
       } catch (e) {
         toast('No se pudo enviar el documento: ' + (e && e.message ? e.message : e), 'error', 6000);
       }
-    });
-
-    g('#legDevolver').addEventListener('click', async () => {
+    };
+    const _devolverDocs = async (selDocs) => {
       try {
-        const selDocs = _docs.filter(d => _sel.has(d.factura || d.numero || ''));
         if (!selDocs.length) { toast('Selecciona los documentos a devolver', 'error'); return; }
         const u = __X.getUsuarioActual();
         const nota = prompt('Motivo de la devoluci\u00f3n (opcional):');
         if (nota === null) return;
         let n = 0;
-        selDocs.forEach(doc => { if (__X.devolverDocumento(doc, u ? u.nombre : '', nota).ok) n++; });
+        const movidos = [];
+        selDocs.forEach(doc => { if (__X.devolverDocumento(doc, u ? u.nombre : '', nota).ok) { n++; movidos.push(doc); } });
         if (__X.guardar) __X.guardar();
+        if (movidos.length && __X.sincronizarDerivacionCC) await __X.sincronizarDerivacionCC(movidos, u ? u.nombre : '');
         _sel.clear();
         toast(n + ' documento(s) devueltos al \u00e1rea anterior', 'success');
         _pintar();
       } catch (e) {
         toast('No se pudo devolver el documento: ' + (e && e.message ? e.message : e), 'error', 6000);
       }
+    };
+    g('#legEnviar').addEventListener('click', () => _enviarDocs(_docs.filter(d => _sel.has(d.factura || d.numero || ''))));
+    g('#legDevolver').addEventListener('click', () => _devolverDocs(_docs.filter(d => _sel.has(d.factura || d.numero || ''))));
+    const _idDoc = d => d.factura || d.numero || '';
+    g('#legSelTodos').addEventListener('click', () => { _docs.forEach(d => _sel.add(_idDoc(d))); _ultimoDoc = null; _pintar(); });
+    g('#legSelNinguno').addEventListener('click', () => { _sel.clear(); _ultimoDoc = null; _pintar(); });
+    g('#legSelInvertir').addEventListener('click', () => { _docs.forEach(d => { const i = _idDoc(d); if (_sel.has(i)) _sel.delete(i); else _sel.add(i); }); _ultimoDoc = null; _pintar(); });
+    g('#legSelRut').addEventListener('click', () => {
+        const primero = _docs.find(d => _sel.has(_idDoc(d)));
+        if (!primero) { toast('Marca primero un documento del cliente', 'error'); return; }
+        _docs.forEach(d => { if (d.rut === primero.rut) _sel.add(_idDoc(d)); });
+        _ultimoDoc = null; _pintar();
+    });
+    g('#legSelVencidos').addEventListener('click', () => {
+        _sel.clear();
+        _docs.forEach(d => { if (T.saldoBaseFactura(d) > 0 && (d.diasAtraso || 0) > 0) _sel.add(_idDoc(d)); });
+        _ultimoDoc = null; _pintar();
     });
 
     g('#doHechos').addEventListener('input', e => { estado.hechosLibres = e.target.value; guardarEstado(); });
@@ -16961,7 +17022,19 @@ async function renderDocumentos(box) {
     }));
 
     g('#doLimpiar').addEventListener('click', () => {
-        _sel.clear(); estado.incumplimientos = []; guardarEstado(); _pintar(); toast('Selecci\u00f3n limpiada', 'info');
+        _sel.clear();
+        _ultimoDoc = null;
+        estado.incumplimientos = [];
+        estado.hechosLibres = '';
+        box.querySelectorAll('.incChk').forEach(c => { c.checked = false; });
+        const hechos = box.querySelector('#doHechos'); if (hechos) hechos.value = '';
+        const todos = box.querySelector('#legAll'); if (todos) todos.checked = false;
+        ['#legFiltRut', '#legFiltFact', '#legFiltRazon'].forEach(q => { const el = box.querySelector(q); if (el) el.value = ''; });
+        const err = box.querySelector('#legError'); if (err) err.innerHTML = '';
+        _legalFacturas.forEach(f => { f.seleccionado = false; });
+        guardarEstado();
+        _pintar();
+        toast('Selecci\u00f3n limpiada', 'info');
     });
 
     __X.engancharReporte(box, 'doDestino', 'legDocFmt', async (tipo, formato) => { try {
@@ -17025,7 +17098,7 @@ function _sincronizarDeudor(box) {
 }
 
 function _validarSeleccion(box) {
-    const sel = estado.facturas.filter(f => f.seleccionado);
+    const sel = _legalFacturas.filter(f => f.seleccionado);
 
     const err = box.querySelector('#legError');
     if (!sel.length) { if (err) err.innerHTML = '<div class="error">❌ No hay documentos seleccionados. Marca la casilla junto a cada documento en la tabla de arriba.</div>'; toast('Selecciona los documentos a incluir en el documento', 'error'); return null; }
@@ -17238,6 +17311,7 @@ async function renderDescargos(box) {
     await T.cargarTasas();
     _d = await store.get(KEY, {}) || {};
     if (!Array.isArray(_d.causales)) _d.causales = [];
+    _d.causales = _d.causales.map(c => c === 'faltaReclamo' ? 'tituloEjecutivo' : c).filter((c, i, arr) => arr.indexOf(c) === i);
     _aplicarAcreedor();
     _dibujar(box);
 }
@@ -17394,8 +17468,9 @@ function _dibujar(box) {
         const destId=box.querySelector('#descDestino')?box.querySelector('#descDestino').value:'';
         if(!destId){toast('Selecciona un destino','error');return;}
         const u=__X.getUsuarioActual();const nota=prompt('Nota (opcional):');if(nota===null)return;
-        let n=0;sel.forEach(doc=>{if(__X.derivarDocumento(doc,destId,u?u.nombre:'',nota).ok)n++;});
+        let n=0;const mv=[];sel.forEach(doc=>{if(__X.derivarDocumento(doc,destId,u?u.nombre:'',nota).ok){n++;mv.push(doc);}});
         if (__X.guardar) __X.guardar();
+        if (mv.length && __X.sincronizarDerivacionCC) await __X.sincronizarDerivacionCC(mv, u?u.nombre:'');
         _descSel.clear();toast(n+' enviado(s)','success');_pintarDesc();
     }catch(e){toast('No se pudo enviar el documento: '+(e&&e.message?e.message:e),'error',6000);}
     });
@@ -17403,8 +17478,9 @@ function _dibujar(box) {
         const sel=_descDocs.filter(dd=>_descSel.has(dd.factura||dd.numero||''));
         if(!sel.length){toast('Selecciona documentos','error');return;}
         const u=__X.getUsuarioActual();const nota=prompt('Motivo (opcional):');if(nota===null)return;
-        let n=0;sel.forEach(doc=>{if(__X.devolverDocumento(doc,u?u.nombre:'',nota).ok)n++;});
+        let n=0;const mv=[];sel.forEach(doc=>{if(__X.devolverDocumento(doc,u?u.nombre:'',nota).ok){n++;mv.push(doc);}});
         if (__X.guardar) __X.guardar();
+        if (mv.length && __X.sincronizarDerivacionCC) await __X.sincronizarDerivacionCC(mv, u?u.nombre:'');
         _descSel.clear();toast(n+' devuelto(s)','success');_pintarDesc();
     }catch(e){toast('No se pudo devolver el documento: '+(e&&e.message?e.message:e),'error',6000);}
     });
@@ -18606,6 +18682,47 @@ async function subirHistoricoCC(lista, usuario){
 function push(d){ if(!d.id) d.id = _nuevoIdCC(); _docs.push(d); }
 function removeAt(i){ _docs.splice(i, 1); }
 function indexOf(d){ return _docs.indexOf(d); }
+
+function _nrkCC(v){ return String(v || '').toLowerCase().replace(/[^0-9k]/g, ''); }
+function maestroCC(doc, crear){
+    if(!doc) return null;
+    if(_docs.indexOf(doc) >= 0) return doc;
+    const num = String(doc.factura || doc.numero || '').trim();
+    const rk = _nrkCC(doc.rut);
+    const hallar = function(lista){ return lista.find(function(d){ return d !== doc && ((doc.id && d.id === doc.id) || (num && String(d.factura || d.numero || '').trim() === num && _nrkCC(d.rut) === rk)); }); };
+    const m = hallar(_docs) || hallar(_hist);
+    if(m || !crear || !num) return m || null;
+    const monto = Number(doc.montoTotal != null ? doc.montoTotal : doc.monto) || 0;
+    const n = {
+        id: _nuevoIdCC(), factura: num, numero: num, orden: doc.orden || num, rut: doc.rut || '', razon: doc.razon || '',
+        fechaEmision: doc.fechaEmision || '', plazoVenc: doc.plazoVenc || 30, monto: monto, tipoDoc: doc.tipoDoc || 'FA',
+        pagos: 0, notaCredito: 0, ajustePrecio: 0, bitacora: Array.isArray(doc.bitacora) ? doc.bitacora.slice() : [],
+        actualizado: new Date().toISOString()
+    };
+    if(doc.saldo != null && Number(doc.saldo) < monto) n.pagos = monto - Math.max(0, Number(doc.saldo) || 0);
+    try { recalcularDocCC(n); } catch(e) {}
+    push(n);
+    guardar();
+    return n;
+}
+async function sincronizarDerivacionCC(lista, usuario){
+    const campos = function(d){ return { asignadoA: d.asignadoA || '', rutaAreas: (d.rutaAreas || []).slice(), derivaciones: (d.derivaciones || []).slice(), fechaAsignacion: d.fechaAsignacion || '' }; };
+    let fallos = 0;
+    for (const d of (lista || [])) {
+        const c = campos(d);
+        let r = null;
+        try { r = await fusionarCamposCC(d, c, usuario); } catch(e) { r = null; }
+        if (r && r.masReciente) {
+            Object.assign(d, c);
+            try { r = await fusionarCamposCC(d, c, usuario); } catch(e) { r = null; }
+        }
+        if (!r || r.ok === false) fallos++;
+    }
+    guardar();
+    return { fallos: fallos };
+}
+__X.maestroCC = maestroCC;
+__X.sincronizarDerivacionCC = sincronizarDerivacionCC;
 
 async function cambiarEstadoCC(doc, campo, valorNuevo, usuario, valorEsperadoManual){
     if(!doc.id) doc.id = _nuevoIdCC();
@@ -20552,15 +20669,25 @@ function _buscarImportCC(m, o){
     if (k.startsWith('|') || k.endsWith('|')) return undefined;
     const c = m[k] || [];
     if (!c.length) return undefined;
-    return c.find(d => Math.round(Number(d.monto) || 0) === Math.round(Number(o.monto) || 0)) || c[0];
+    const mo = Math.round(Number(o.monto) || 0);
+    const mismoMonto = d => Math.round(Number(d.monto) || 0) === mo;
+    const mismoTipo = d => !d.tipoDoc || !o.tipoDoc || d.tipoDoc === o.tipoDoc;
+    return c.find(d => mismoMonto(d) && mismoTipo(d))
+        || c.find(d => mismoMonto(d))
+        || c.find(d => !CC.esHistoricoCC(d) && mismoTipo(d))
+        || c.find(d => !CC.esHistoricoCC(d))
+        || c[0];
 }
 function _saldoImportCC(o){
     if (o.saldoArchivo !== null && o.saldoArchivo !== undefined) return o.saldoArchivo;
     return (o.monto || 0) + (o.ajuste || 0) - (o.notaCredito || 0) - (o.pagos || 0);
 }
+function _pagosImportCC(ex, o){
+    const reg = (ex.movimientos || []).reduce((a, m) => a + ((m && m.tipo === 'PAGO' && m.estado !== 'REVERSADO') ? (Number(m.monto) || 0) : 0), 0);
+    return Math.max(Number(o.pagos) || 0, reg);
+}
 function _reactivarSiCorrespondeCC(ex, o, usuario){
     if (!CC.esHistoricoCC(ex)) return 'activo';
-    if (_saldoImportCC(o) > 0) { CC.reactivarHistorico(ex, 'Reapareció con saldo pendiente en una importación', usuario); return 'reactivado'; }
     return 'historico';
 }
 
@@ -20750,16 +20877,8 @@ async function _importarExcel(){
                     const estH = _reactivarSiCorrespondeCC(ex, o, nUImp);
                     if (estH === 'historico') {
                         enHistorico++;
-                        if (o.fechaEmision && __X.fechaISO(ex.fechaEmision) !== __X.fechaISO(o.fechaEmision)) {
-                            ex.fechaEmision = o.fechaEmision;
-                            ex.actualizado = new Date().toISOString();
-                            CC.recalcularDocCC(ex);
-                            _tocados.push(ex);
-                            actualizados++;
-                        }
                         return;
                     }
-                    if (estH === 'reactivado') cambio = true;
                     const set = (campo, valor) => {
                         if(valor === '' || valor === null || valor === undefined) return;
                         if(ex[campo] !== valor){ ex[campo] = valor; cambio = true; }
@@ -20768,7 +20887,7 @@ async function _importarExcel(){
                     set('fechaEmision', o.fechaEmision);
                     set('monto', o.monto);
                     if (o.traeNC) set('notaCredito', o.notaCredito);
-                    if (o.traePagos) set('pagos', o.pagos);
+                    if (o.traePagos) set('pagos', _pagosImportCC(ex, o));
                     set('proxGestion', o.proxGestion);
                     set('reclamoMP', o.reclamoMP);
                     set('reclamoCGR', o.reclamoCGR);
@@ -20873,11 +20992,10 @@ function _pegar(){
         let cambio = false;
         const estHP = _reactivarSiCorrespondeCC(ex, p, nUPeg);
         if (estHP === 'historico') { enHistoricoP++; return; }
-        if (estHP === 'reactivado') cambio = true;
         const set = (campo, valor) => { if (valor !== '' && valor !== null && valor !== undefined && ex[campo] !== valor) { ex[campo] = valor; cambio = true; } };
         set('razon', p.razon); set('fechaEmision', p.fechaEmision); set('monto', p.monto);
         if (p.traeNC) set('notaCredito', p.notaCredito);
-        if (p.traePagos) set('pagos', p.pagos);
+        if (p.traePagos) set('pagos', _pagosImportCC(ex, p));
         set('proxGestion', p.proxGestion);
         set('reclamoMP', p.reclamoMP); set('reclamoCGR', p.reclamoCGR); set('tipoDoc', p.tipoDoc);
         if (ex._eliminado) {
@@ -21999,7 +22117,10 @@ async function abrirPagoMasivoCC(host, onChange) {
         host.querySelectorAll('.pmSel').forEach(c => c.addEventListener('change', () => {
             filas[+c.dataset.i].marcar = c.checked;
             const f = filas[+c.dataset.i];
-            if (c.checked && (f.estado === 'sobrepago' || f.estado === 'pagada' || f.estado === 'duplicado' || f.estado === 'rutdif')) {
+            if (c.checked && (f.estado === 'pagada' || f.estado === 'duplicado')) {
+                alert('Esta fila está marcada como «' + f.texto + '». Un documento no se paga dos veces; no se puede aplicar.');
+                c.checked = false; f.marcar = false;
+            } else if (c.checked && (f.estado === 'sobrepago' || f.estado === 'rutdif')) {
                 if (!confirm('Esta fila está marcada como «' + f.texto + '». ¿Aplicarla de todos modos?')) { c.checked = false; f.marcar = false; }
             }
             refrescarN();
@@ -22037,7 +22158,7 @@ async function abrirPagoMasivoCC(host, onChange) {
             const carga = grupo.map((f, j) => ({
                 clave: i + j, id: f.doc.id, monto: f.monto, fecha: f.fecha, referencia: f.desc.slice(0, 80),
                 rut: _rutDeTexto(f.desc), montoTexto: formatCLP(f.monto) + '',
-                forzar: ['sobrepago', 'pagada', 'rutdif'].indexOf(f.estado) !== -1, permitirDuplicado: f.estado === 'duplicado'
+                forzar: ['sobrepago', 'rutdif'].indexOf(f.estado) !== -1
             }));
             let resp = null, falla = '';
             try { resp = await __X.llamar('apiAplicarPagosCC', carga, nombreU + extra, lote, estado.archivo); }
